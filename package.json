@@ -1,0 +1,11 @@
+{
+  "name": "dungeon-router",
+  "private": true,
+  "packageManager": "pnpm@9.15.9",
+  "scripts": {
+    "dev:web": "pnpm --dir apps/web dev",
+    "build:web": "pnpm --dir apps/web build",
+    "typecheck": "pnpm --dir apps/web typecheck"
+  }
+}
+

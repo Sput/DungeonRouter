@@ -1,0 +1,10 @@
+[workspace]
+members = ["apps/api"]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/Sput/DungeonRouter"
+rust-version = "1.88"
+
