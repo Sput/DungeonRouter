@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, Query, State},
     http::{HeaderValue, Method, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
@@ -20,6 +20,8 @@ use tower_http::{
 use tracing::Level;
 
 pub mod routing;
+pub mod search;
+pub mod srd;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -38,6 +40,8 @@ pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/models", get(models))
+        .route("/api/search", get(search_rules))
+        .route("/api/sources/{chunk_id}", get(source_passage))
         .route("/api/router/complete", post(complete))
         .route("/api/router/stream", post(stream))
         .with_state(state)
@@ -56,6 +60,76 @@ pub fn app(state: AppState) -> Router {
 
 async fn models() -> Json<Vec<ModelDescriptor>> {
     Json(model_catalog())
+}
+
+#[derive(Debug, Deserialize)]
+struct SearchQuery {
+    q: String,
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Serialize)]
+struct SearchResponse {
+    query: String,
+    results: Vec<search::SearchResult>,
+}
+
+async fn search_rules(
+    State(state): State<AppState>,
+    Query(request): Query<SearchQuery>,
+) -> Result<Json<SearchResponse>, SearchApiError> {
+    let query = request.q.trim();
+    if query.chars().count() > 500 {
+        return Err(SearchApiError::Invalid(
+            "search query must not exceed 500 characters".into(),
+        ));
+    }
+    let limit = request.limit.unwrap_or(6);
+    if !(1..=20).contains(&limit) {
+        return Err(SearchApiError::Invalid(
+            "limit must be between 1 and 20".into(),
+        ));
+    }
+    let results = search::search(&state.db, query, limit).await?;
+    Ok(Json(SearchResponse {
+        query: query.to_owned(),
+        results,
+    }))
+}
+
+async fn source_passage(
+    State(state): State<AppState>,
+    Path(chunk_id): Path<i64>,
+) -> Result<Json<search::SourceChunk>, SearchApiError> {
+    Ok(Json(search::source(&state.db, chunk_id).await?))
+}
+
+enum SearchApiError {
+    Invalid(String),
+    Search(search::SearchError),
+}
+
+impl From<search::SearchError> for SearchApiError {
+    fn from(value: search::SearchError) -> Self {
+        match value {
+            search::SearchError::EmptyQuery => Self::Invalid(value.to_string()),
+            _ => Self::Search(value),
+        }
+    }
+}
+
+impl axum::response::IntoResponse for SearchApiError {
+    fn into_response(self) -> axum::response::Response {
+        let (status, error) = match self {
+            Self::Invalid(error) => (StatusCode::BAD_REQUEST, error),
+            Self::Search(search::SearchError::NotFound) => (
+                StatusCode::NOT_FOUND,
+                search::SearchError::NotFound.to_string(),
+            ),
+            Self::Search(error) => (StatusCode::SERVICE_UNAVAILABLE, error.to_string()),
+        };
+        (status, Json(ApiErrorBody { error })).into_response()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -184,7 +258,10 @@ async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::routing::{CompletionResponse, ModelTier, testing::MockRouter};
+    use crate::{
+        routing::{CompletionResponse, ModelTier, testing::MockRouter},
+        srd::{SrdChunk, SrdDocument, SrdSnapshot, ingest_snapshot},
+    };
     use axum::{
         body::Body,
         http::{Request, header},
@@ -200,6 +277,35 @@ mod tests {
             .await
             .expect("in-memory database should open");
         AppState { db, router }
+    }
+
+    async fn searchable_test_state(router: SharedModelRouter) -> AppState {
+        let state = test_state(router).await;
+        sqlx::migrate!("./migrations").run(&state.db).await.unwrap();
+        ingest_snapshot(
+            &state.db,
+            &SrdSnapshot {
+                title: "SRD".into(),
+                edition: "5e 2014".into(),
+                license: "CC BY 4.0".into(),
+                upstream: "example".into(),
+                revision: "fixture".into(),
+                documents: vec![SrdDocument {
+                    title: "Conditions".into(),
+                    source_path: "08_Gamemastering/Conditions.md".into(),
+                    chunks: vec![SrdChunk {
+                        heading: "Prone".into(),
+                        section_path: "Conditions > Prone".into(),
+                        content: "A prone creature's only movement option is to crawl.".into(),
+                        ordinal: 0,
+                        source_locator: "08_Gamemastering/Conditions.md#prone".into(),
+                    }],
+                }],
+            },
+        )
+        .await
+        .unwrap();
+        state
     }
 
     fn mock_router() -> Arc<MockRouter> {
@@ -337,5 +443,62 @@ mod tests {
         assert!(text.contains("Mock ruling"));
         assert!(text.contains("event: done"));
         assert_eq!(router.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn rules_search_returns_citable_results() {
+        let response = app(searchable_test_state(mock_router()).await)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/search?q=what%20does%20prone%20do")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("Conditions &gt; Prone") || text.contains("Conditions > Prone"));
+        assert!(text.contains("Conditions.md#prone"));
+        assert!(text.contains("fixture"));
+    }
+
+    #[tokio::test]
+    async fn source_endpoint_returns_full_passage() {
+        let state = searchable_test_state(mock_router()).await;
+        let chunk_id: i64 = sqlx::query_scalar("SELECT id FROM source_chunks LIMIT 1")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/sources/{chunk_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("only movement option"));
     }
 }

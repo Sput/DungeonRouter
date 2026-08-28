@@ -10,6 +10,7 @@ The repository currently contains the application foundation, manual model routi
 - a replaceable Rust `ModelRouter` abstraction;
 - Switchyard passthrough routes for nano, mini, and GPT-5;
 - streamed browser responses with stop-generation support and routing metadata;
+- a bundled, CC-licensed SRD 5.1 snapshot with SQLite FTS5 retrieval;
 - shared local-development commands and environment configuration.
 
 ## Repository layout
@@ -59,6 +60,8 @@ The web client runs at `http://localhost:5173` and proxies `/api` requests to th
 
 See [Model routing](docs/model-routing.md) to configure and run Switchyard on `http://127.0.0.1:4100`.
 
+The API indexes the bundled SRD automatically on first startup. See [SRD data](docs/srd-data.md) for provenance, rebuild instructions, and search endpoints.
+
 ## Checks
 
 ```sh
@@ -72,6 +75,7 @@ pnpm build:web
 
 - [Project plan](docs/project-plan.md)
 - [Model routing](docs/model-routing.md)
+- [SRD data](docs/srd-data.md)
 - [Contributing](CONTRIBUTING.md)
 - [SRD attribution](NOTICE.md)
 

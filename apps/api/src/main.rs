@@ -1,7 +1,7 @@
 use std::{env, net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
-use dungeon_router_api::{AppState, app, routing::SwitchyardRouter};
+use dungeon_router_api::{AppState, app, routing::SwitchyardRouter, srd::ensure_bundled_srd};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::net::TcpListener;
 use tracing::info;
@@ -41,6 +41,12 @@ async fn main() -> Result<()> {
         .run(&db)
         .await
         .context("failed to run database migrations")?;
+    let indexed_chunks = ensure_bundled_srd(&db)
+        .await
+        .context("failed to initialize bundled SRD content")?;
+    if indexed_chunks > 0 {
+        info!(indexed_chunks, "Indexed bundled SRD content");
+    }
 
     let router = Arc::new(
         SwitchyardRouter::new(switchyard_base_url)

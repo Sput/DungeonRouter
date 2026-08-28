@@ -4,6 +4,7 @@ target/
 node_modules/
 dist/
 data/
+tmp/
 *.tsbuildinfo
 *.db
 *.db-shm
