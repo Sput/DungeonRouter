@@ -11,11 +11,12 @@ type StreamPayload =
   | { type: "usage"; usage: { total_tokens: number } }
   | { type: "done" };
 type GroundedSource = {
-  citation_id: string; chunk_id: number; document_title: string; section_path: string;
+  citation_id: string; chunk_id: number; kind: "srd" | "campaign_note"; document_title: string; section_path: string;
   excerpt: string; source_locator: string; source_revision: string | null; license: string | null;
 };
 type SourceChunk = GroundedSource & { content: string; heading: string };
 type CitationValidation = { cited: string[]; unsupported: string[]; missing_required: boolean };
+type CampaignNote = { id: number; title: string; filename: string; chunk_count: number; created_at: string };
 
 const FALLBACK_MODELS: ModelDescriptor[] = [
   { tier: "nano", label: "Nano", model_id: "gpt-5-nano", purpose: "Direct lookup and short grounded answers" },
@@ -41,6 +42,9 @@ export function App() {
   const [sources, setSources] = useState<GroundedSource[]>([]);
   const [citationValidation, setCitationValidation] = useState<CitationValidation | null>(null);
   const [activeSource, setActiveSource] = useState<SourceChunk | null>(null);
+  const [notes, setNotes] = useState<CampaignNote[]>([]);
+  const [noteMessage, setNoteMessage] = useState<string | null>(null);
+  const [notesBusy, setNotesBusy] = useState(false);
   const controller = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -53,9 +57,11 @@ export function App() {
         if (!response.ok) throw new Error("Model catalog failed");
         return response.json() as Promise<ModelDescriptor[]>;
       }),
-    ]).then(([nextHealth, nextModels]) => {
+      fetch("/api/notes").then((response) => response.ok ? response.json() as Promise<CampaignNote[]> : []),
+    ]).then(([nextHealth, nextModels, nextNotes]) => {
       setHealth(nextHealth);
       setModels(nextModels);
+      setNotes(nextNotes);
     }).catch(() => setHealthError(true));
   }, []);
 
@@ -133,6 +139,38 @@ export function App() {
     }
   }
 
+  async function uploadNote(file: File | undefined) {
+    if (!file) return;
+    setNotesBusy(true); setNoteMessage(null);
+    try {
+      if (!/\.(md|markdown|txt)$/i.test(file.name)) throw new Error("Choose a Markdown or plain-text file.");
+      if (file.size > 256 * 1024) throw new Error("Campaign notes must be no larger than 256 KiB.");
+      const response = await fetch("/api/notes", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: file.name.replace(/\.(md|markdown|txt)$/i, ""), filename: file.name, content: await file.text() }),
+      });
+      const body = await response.json().catch(() => null) as CampaignNote & { error?: string } | null;
+      if (!response.ok) throw new Error(body?.error ?? "The note could not be indexed.");
+      setNotes((current) => [body as CampaignNote, ...current]);
+      setNoteMessage(`${file.name} is indexed and available to answers.`);
+    } catch (error) {
+      setNoteMessage(error instanceof Error ? error.message : "The note could not be indexed.");
+    } finally { setNotesBusy(false); }
+  }
+
+  async function deleteNote(note: CampaignNote) {
+    if (!window.confirm(`Delete “${note.title}” and all of its indexed passages?`)) return;
+    setNotesBusy(true); setNoteMessage(null);
+    try {
+      const response = await fetch(`/api/notes/${note.id}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("The note could not be deleted.");
+      setNotes((current) => current.filter((item) => item.id !== note.id));
+      setNoteMessage(`${note.title} was deleted.`);
+    } catch (error) {
+      setNoteMessage(error instanceof Error ? error.message : "The note could not be deleted.");
+    } finally { setNotesBusy(false); }
+  }
+
   return <main><section className="shell" aria-labelledby="page-title">
     <header className="hero"><div><div className="eyebrow">SRD 5.1 · 2014 rules</div><h1 id="page-title">DungeonRouter</h1><p className="lede">Fast rules answers with cost-aware model routing.</p></div>
       <div className="status" role="status" aria-live="polite"><span className={health?.status === "ok" ? "dot dot--ok" : "dot"}/><span>{status}</span>{health?.database === "connected" && <span className="muted">SQLite ready</span>}</div></header>
@@ -151,9 +189,13 @@ export function App() {
       {routingReason && <p className="routing-reason"><strong>Why this model:</strong> {routingReason}{classifierConfidence !== null ? ` · ${Math.round(classifierConfidence * 100)}% confidence` : ""}</p>}
     </section>
     {sources.length > 0 && <section className="sources" aria-labelledby="sources-heading"><div className="sources-heading"><h2 id="sources-heading">Sources</h2><span>{sources.length} retrieved</span></div>
-      <div className="source-list">{sources.map((source) => <button type="button" className="source-card" key={source.citation_id} onClick={() => void openSource(source)}><span className="source-id">{source.citation_id}</span><span><strong>{source.section_path}</strong><small>{source.excerpt}</small></span></button>)}</div>
-      {activeSource && <article className="source-detail"><div><span className="source-id">{activeSource.citation_id}</span><strong>{activeSource.section_path}</strong><button type="button" className="close-source" aria-label="Close source" onClick={() => setActiveSource(null)}>×</button></div><pre>{activeSource.content}</pre><footer>{activeSource.source_locator} · {activeSource.license}</footer></article>}
+      <div className="source-list">{sources.map((source) => <button type="button" className="source-card" key={source.citation_id} onClick={() => void openSource(source)}><span className="source-id">{source.citation_id}</span><span><span className={`source-kind source-kind--${source.kind}`}>{source.kind === "srd" ? "SRD" : "Campaign"}</span><strong>{source.section_path}</strong><small>{source.excerpt}</small></span></button>)}</div>
+      {activeSource && <article className="source-detail"><div><span className="source-id">{activeSource.citation_id}</span><strong>{activeSource.section_path}</strong><button type="button" className="close-source" aria-label="Close source" onClick={() => setActiveSource(null)}>×</button></div><pre>{activeSource.content}</pre><footer>{activeSource.source_locator} · {activeSource.kind === "campaign_note" ? "Private campaign note" : activeSource.license}</footer></article>}
     </section>}
+    <section className="notes" aria-labelledby="notes-heading"><div className="notes-heading"><div><h2 id="notes-heading">Campaign notes</h2><p>Private local context sent to OpenAI only when retrieved for an answer.</p></div><label className="upload-button">{notesBusy ? "Working…" : "Add note"}<input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" disabled={notesBusy} onChange={(event) => { void uploadNote(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label></div>
+      {noteMessage && <p className="note-message" role="status">{noteMessage}</p>}
+      {notes.length ? <ul className="note-list">{notes.map((note) => <li key={note.id}><span><strong>{note.title}</strong><small>{note.filename} · {note.chunk_count} {note.chunk_count === 1 ? "passage" : "passages"}</small></span><button type="button" className="delete-note" disabled={notesBusy} onClick={() => void deleteNote(note)}>Delete</button></li>)}</ul> : <p className="notes-empty">No campaign notes indexed yet. Markdown and text files up to 256 KiB are supported.</p>}
+    </section>
   </section></main>;
 }
 

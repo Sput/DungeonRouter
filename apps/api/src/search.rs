@@ -5,6 +5,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct SearchResult {
     pub chunk_id: i64,
+    pub kind: String,
     pub document_title: String,
     pub heading: String,
     pub section_path: String,
@@ -19,6 +20,7 @@ pub struct SearchResult {
 #[derive(Debug, Clone, Serialize, FromRow)]
 pub struct SourceChunk {
     pub chunk_id: i64,
+    pub kind: String,
     pub document_title: String,
     pub heading: String,
     pub section_path: String,
@@ -45,10 +47,31 @@ pub async fn search(
     limit: u32,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let expression = fts_expression(query).ok_or(SearchError::EmptyQuery)?;
+    let mut results = Vec::new();
+    for kind in ["srd", "campaign_note"] {
+        results.extend(search_kind(pool, &expression, kind, limit).await?);
+    }
+    results.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    results.truncate(limit as usize);
+    Ok(results)
+}
+
+async fn search_kind(
+    pool: &SqlitePool,
+    expression: &str,
+    kind: &str,
+    limit: u32,
+) -> Result<Vec<SearchResult>, SearchError> {
     sqlx::query_as::<_, SearchResult>(
         r#"
         SELECT
             source_chunks.id AS chunk_id,
+            documents.kind,
             documents.title AS document_title,
             source_chunks.heading,
             source_chunks.section_path,
@@ -61,12 +84,13 @@ pub async fn search(
         FROM source_chunks_fts
         JOIN source_chunks ON source_chunks.id = source_chunks_fts.rowid
         JOIN documents ON documents.id = source_chunks.document_id
-        WHERE source_chunks_fts MATCH ?
+        WHERE source_chunks_fts MATCH ? AND documents.kind = ?
         ORDER BY bm25(source_chunks_fts, 3.0, 1.5, 1.0)
         LIMIT ?
         "#,
     )
     .bind(expression)
+    .bind(kind)
     .bind(i64::from(limit))
     .fetch_all(pool)
     .await
@@ -77,7 +101,7 @@ pub async fn source(pool: &SqlitePool, chunk_id: i64) -> Result<SourceChunk, Sea
     sqlx::query_as::<_, SourceChunk>(
         r#"
         SELECT source_chunks.id AS chunk_id, documents.title AS document_title,
-            source_chunks.heading, source_chunks.section_path, source_chunks.content,
+            documents.kind, source_chunks.heading, source_chunks.section_path, source_chunks.content,
             source_chunks.source_locator, documents.source_url, documents.source_revision, documents.license
         FROM source_chunks JOIN documents ON documents.id = source_chunks.document_id
         WHERE source_chunks.id = ?

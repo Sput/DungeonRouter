@@ -20,6 +20,7 @@ use tower_http::{
 use tracing::Level;
 
 pub mod chat;
+pub mod notes;
 pub mod routing;
 pub mod search;
 pub mod srd;
@@ -43,6 +44,8 @@ pub fn app(state: AppState) -> Router {
         .route("/api/models", get(models))
         .route("/api/search", get(search_rules))
         .route("/api/sources/{chunk_id}", get(source_passage))
+        .route("/api/notes", get(list_notes).post(create_note))
+        .route("/api/notes/{note_id}", get(get_note).delete(delete_note))
         .route("/api/router/complete", post(complete))
         .route("/api/router/stream", post(stream))
         .route("/api/chat", post(chat))
@@ -58,6 +61,63 @@ pub fn app(state: AppState) -> Router {
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
+}
+
+async fn list_notes(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<notes::NoteSummary>>, NoteApiError> {
+    Ok(Json(notes::list(&state.db).await?))
+}
+
+async fn get_note(
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<Json<notes::NoteSummary>, NoteApiError> {
+    Ok(Json(notes::get(&state.db, note_id).await?))
+}
+
+async fn create_note(
+    State(state): State<AppState>,
+    Json(request): Json<notes::CreateNote>,
+) -> Result<(StatusCode, Json<notes::NoteSummary>), NoteApiError> {
+    Ok((
+        StatusCode::CREATED,
+        Json(notes::create(&state.db, request).await?),
+    ))
+}
+
+async fn delete_note(
+    State(state): State<AppState>,
+    Path(note_id): Path<i64>,
+) -> Result<StatusCode, NoteApiError> {
+    notes::delete(&state.db, note_id).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+struct NoteApiError(notes::NoteError);
+
+impl From<notes::NoteError> for NoteApiError {
+    fn from(value: notes::NoteError) -> Self {
+        Self(value)
+    }
+}
+
+impl axum::response::IntoResponse for NoteApiError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match self.0 {
+            notes::NoteError::NotFound => StatusCode::NOT_FOUND,
+            notes::NoteError::Duplicate => StatusCode::CONFLICT,
+            notes::NoteError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+            _ => StatusCode::BAD_REQUEST,
+        };
+        (
+            status,
+            Json(ApiErrorBody {
+                error: self.0.to_string(),
+            }),
+        )
+            .into_response()
+    }
 }
 
 async fn models() -> Json<Vec<ModelDescriptor>> {
@@ -220,7 +280,7 @@ async fn chat(
         Box::pin(async_stream::stream! {
             yield Ok(sse_json("sources", &Vec::<crate::chat::GroundedSource>::new()));
             yield Ok(stream_event(StreamEvent::Delta {
-                text: "Not found in the supplied SRD passages. Try using specific rules terms or search the SRD directly.".into(),
+                text: "Not found in the supplied sources. Try using specific rules or campaign terms, or search the archive directly.".into(),
             }));
             yield Ok(sse_json("citation_validation", &crate::chat::CitationValidation {
                 cited: Vec::new(), unsupported: Vec::new(), missing_required: false,
@@ -565,7 +625,7 @@ mod tests {
                 .unwrap()
                 .contains("Answer only from")
         );
-        assert!(calls[0].prompt.contains("<source id=\"S1\""));
+        assert!(calls[0].prompt.contains("\"id\":\"S1\""));
         assert!(calls[0].prompt.contains("only movement option"));
     }
 
@@ -593,8 +653,70 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(text.contains("Not found in the supplied SRD passages"));
+        assert!(text.contains("Not found in the supplied sources"));
         assert!(router.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn campaign_note_api_indexes_lists_and_deletes_a_note() {
+        let state = searchable_test_state(mock_router()).await;
+        let service = app(state.clone());
+        let response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/notes")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r##"{"title":"Ashen Vale","filename":"ashen.md","content":"# Lore\n\nThe moon gate opens with a silver key."}"##,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let note_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM documents WHERE kind = 'campaign_note' AND title = 'Ashen Vale'",
+        )
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+
+        let list_response = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/notes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let list_text = String::from_utf8(
+            list_response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(list_text.contains("Ashen Vale"));
+
+        let delete_response = service
+            .oneshot(
+                Request::builder()
+                    .method("DELETE")
+                    .uri(format!("/api/notes/{note_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(delete_response.status(), StatusCode::NO_CONTENT);
+        assert!(notes::list(&state.db).await.unwrap().is_empty());
     }
 
     #[tokio::test]
