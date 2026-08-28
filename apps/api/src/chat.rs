@@ -2,7 +2,7 @@ use serde::Serialize;
 use sqlx::SqlitePool;
 
 use crate::{
-    routing::{CompletionRequest, ModelTier},
+    routing::{CompletionRequest, ModelTier, RoutingMode},
     search::{self, SearchError},
 };
 
@@ -42,6 +42,7 @@ pub async fn prepare(
     pool: &SqlitePool,
     question: &str,
     model: ModelTier,
+    routing_mode: RoutingMode,
     max_output_tokens: u32,
 ) -> Result<Option<GroundedRequest>, SearchError> {
     let results = search::search(pool, question, SOURCE_LIMIT).await?;
@@ -76,6 +77,7 @@ pub async fn prepare(
             instructions: Some(GROUNDING_INSTRUCTIONS.into()),
             prompt: format!("SRD passages:\n\n{source_blocks}Question: {question}"),
             model,
+            routing_mode,
             max_output_tokens,
         },
         sources,

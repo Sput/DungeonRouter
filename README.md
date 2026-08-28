@@ -12,6 +12,7 @@ The repository currently contains the application foundation, manual model routi
 - streamed browser responses with stop-generation support and routing metadata;
 - a bundled, CC-licensed SRD 5.1 snapshot with SQLite FTS5 retrieval;
 - grounded streamed answers with validated, inspectable SRD citations;
+- automatic cost-aware routing across Nano, Mini, and GPT-5;
 - shared local-development commands and environment configuration.
 
 ## Repository layout

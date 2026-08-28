@@ -28,6 +28,7 @@ button:hover { box-shadow:0 0 16px rgba(242,189,46,.18); }button:disabled { curs
 .message { margin:0; padding:.75rem 1.4rem; color:#c5b078; border-top:1px solid #393938; font-size:.82rem; }.message--error { color:#f3a6a2; }
 .metadata { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0; border-top:1px solid #393938; }.metadata div { min-width:0; padding:1rem 1.4rem; border-right:1px solid #393938; }.metadata div:last-child { border-right:0; }
 .metadata dt { color:#817d77; }.metadata dd { overflow:hidden; margin:.35rem 0 0; color:#d6d0c7; font-family:ui-monospace,monospace; font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
+.routing-reason { margin:0; padding:.8rem 1.4rem; color:#918c84; border-top:1px solid #393938; font-size:.78rem; line-height:1.5; }.routing-reason strong { color:#c8b98e; }
 .citation { display:inline; min-width:0; min-height:0; margin:0 .08rem; padding:.08rem .25rem; color:#f2bd2e; border:0; border-radius:.2rem; background:rgba(242,189,46,.1); font-family:ui-monospace,monospace; font-size:.78em; letter-spacing:0; text-transform:none; vertical-align:.08rem; }
 .citation:hover { box-shadow:none; background:rgba(242,189,46,.2); }
 .sources { padding:1.4rem; }.sources-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }.sources-heading h2 { margin:0; }.sources-heading span { color:#817d77; font-size:.75rem; }

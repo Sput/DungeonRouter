@@ -2,15 +2,22 @@
 
 DungeonRouter isolates model access behind the Rust `ModelRouter` trait. The initial adapter sends OpenAI-compatible Chat Completions requests to a separately running Switchyard server. Switchyard translates those requests to the OpenAI Responses API and keeps the OpenAI credential out of the browser and repository configuration.
 
-## Manual routes
+## Routes
 
 | API value | Switchyard route | OpenAI model |
 |---|---|---|
 | `nano` | `dungeon-router/nano` | `gpt-5-nano` |
 | `mini` | `dungeon-router/mini` | `gpt-5-mini` |
 | `gpt-5` | `dungeon-router/gpt-5` | `gpt-5` |
+| Auto | `dungeon-router/auto` | selected by Switchyard |
 
-Automatic classification is intentionally deferred until the automatic-routing milestone. Manual selection does not incur a classifier call.
+Auto is the browser default. Switchyard's custom multi-target `llm_classifier` route uses `gpt-5-nano` as the classifier and selects the cheapest appropriate answer target:
+
+- Nano for direct definitions and one-passage lookups;
+- Mini for multi-rule explanations and ordinary adjudication;
+- GPT-5 for materially ambiguous or deeply interacting rules.
+
+The classifier returns a strict JSON-schema verdict containing target, task type, reason, and confidence. Switchyard validates the target through a deterministic JSON-pointer policy. Invalid output or classifier failure falls back to Mini; it never silently escalates to GPT-5. Choosing Nano, Mini, or GPT-5 manually uses the passthrough route and does not incur a classifier call.
 
 ## Start Switchyard
 
@@ -76,7 +83,7 @@ The streaming endpoint returns named Server-Sent Events:
 
 The React client reads these events using `fetch` so it can POST the question and cancel the request with an `AbortController`. Pressing Stop preserves the partial answer. When the browser drops the response body, Rust drops the upstream `reqwest` stream as well.
 
-Automatic model selection is still intentionally deferred. Until that milestone, the UI defaults to the cheapest tier (`gpt-5-nano`) and lets the DM explicitly select Mini or GPT-5.
+The routing receipt uses Switchyard's `x-model-router-selected-model` and `x-model-router-rationale` response headers. It displays the actual selected model, route, reason, and classifier confidence when the rationale includes one.
 
 The user-facing rules flow now uses `POST /api/chat`, which performs local SRD retrieval before calling this streaming router. See [Grounded chat](grounded-chat.md). The lower-level `/api/router/*` endpoints remain available for adapter diagnostics.
 

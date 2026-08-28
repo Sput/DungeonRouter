@@ -53,4 +53,4 @@ The chat endpoint emits named server-sent events:
 | `done` | Normal completion |
 | `error` | Normalized stream failure |
 
-Automatic model selection is not part of this milestone. Nano remains the cheapest default and the DM can manually select Mini or GPT-5.
+Auto is the default routing mode. The DM can bypass its classifier cost and force Nano, Mini, or GPT-5 for any question.

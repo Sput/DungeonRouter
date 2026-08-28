@@ -33,3 +33,44 @@ id = "dungeon-router/gpt-5"
 type = "passthrough"
 target = "gpt5"
 
+[routes.auto]
+id = "dungeon-router/auto"
+type = "llm_classifier"
+mode = "custom"
+classifier_target = "nano"
+targets = ["nano", "mini", "gpt5"]
+default_target = "mini"
+max_output_tokens = 300
+prompt = """
+Route a grounded D&D 5e SRD question to the cheapest model likely to answer it correctly.
+
+Choose nano for a direct definition, one-passage lookup, extraction, or short factual answer.
+Choose mini when the answer combines multiple rules, explains an interaction, or requires ordinary adjudication.
+Choose gpt5 only for materially ambiguous timing, conflicting rules, long chains of interactions, or a request for multiple defensible rulings.
+
+Cost is the highest priority after correctness. Do not choose a larger model merely to improve prose. Return exactly one JSON object matching the response schema supplied with the request.
+"""
+response_schema = '''
+{
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "object",
+      "properties": {
+        "target": { "type": "string", "enum": ["nano", "mini", "gpt5"] },
+        "task_type": { "type": "string", "enum": ["direct_lookup", "rules_synthesis", "complex_adjudication"] },
+        "reason": { "type": "string", "maxLength": 180 },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["target", "task_type", "reason", "confidence"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["decision"],
+  "additionalProperties": false
+}
+'''
+
+[routes.auto.policy]
+type = "target_selector"
+selector = "/decision/target"

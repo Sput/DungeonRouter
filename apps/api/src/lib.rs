@@ -8,7 +8,7 @@ use axum::{
 use futures_core::Stream;
 use futures_util::StreamExt;
 use routing::{
-    CompletionRequest, CompletionResponse, ModelDescriptor, ModelTier, RouterError,
+    CompletionRequest, CompletionResponse, ModelDescriptor, ModelTier, RouterError, RoutingMode,
     SharedModelRouter, StreamEvent, model_catalog,
 };
 use serde::{Deserialize, Serialize};
@@ -138,6 +138,8 @@ impl axum::response::IntoResponse for SearchApiError {
 struct ManualCompletionRequest {
     prompt: String,
     model: ModelTier,
+    #[serde(default)]
+    routing_mode: RoutingMode,
     max_output_tokens: Option<u32>,
 }
 
@@ -182,6 +184,7 @@ async fn chat(
         &state.db,
         &request.prompt,
         request.model,
+        request.routing_mode,
         request.max_output_tokens,
     )
     .await
@@ -271,6 +274,7 @@ fn validate_request(request: ManualCompletionRequest) -> Result<CompletionReques
         instructions: None,
         prompt: prompt.to_owned(),
         model: request.model,
+        routing_mode: request.routing_mode,
         max_output_tokens,
     })
 }
@@ -382,8 +386,11 @@ mod tests {
     fn mock_router() -> Arc<MockRouter> {
         Arc::new(MockRouter::new(CompletionResponse {
             content: "Mock ruling".into(),
-            selected_model: ModelTier::Mini,
-            upstream_model: "gpt-5-mini".into(),
+            requested_model: ModelTier::Mini,
+            selected_model: "gpt-5-mini".into(),
+            routing_mode: RoutingMode::Manual,
+            routing_reason: None,
+            classifier_confidence: None,
             usage: None,
         }))
     }
@@ -526,7 +533,7 @@ mod tests {
                     .uri("/api/chat")
                     .header(header::CONTENT_TYPE, "application/json")
                     .body(Body::from(
-                        r#"{"prompt":"What does prone do?","model":"nano"}"#,
+                        r#"{"prompt":"What does prone do?","model":"mini","routing_mode":"auto"}"#,
                     ))
                     .unwrap(),
             )
@@ -550,6 +557,7 @@ mod tests {
 
         let calls = router.calls();
         assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].routing_mode, RoutingMode::Auto);
         assert!(
             calls[0]
                 .instructions

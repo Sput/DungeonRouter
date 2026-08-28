@@ -16,6 +16,7 @@ use futures_util::StreamExt;
 const NANO_ROUTE: &str = "dungeon-router/nano";
 const MINI_ROUTE: &str = "dungeon-router/mini";
 const GPT5_ROUTE: &str = "dungeon-router/gpt-5";
+const AUTO_ROUTE: &str = "dungeon-router/auto";
 
 pub type SharedModelRouter = Arc<dyn ModelRouter>;
 pub type RouterStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, RouterError>> + Send>>;
@@ -27,6 +28,14 @@ pub enum ModelTier {
     Mini,
     #[serde(rename = "gpt-5")]
     Gpt5,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RoutingMode {
+    Auto,
+    #[default]
+    Manual,
 }
 
 impl ModelTier {
@@ -96,14 +105,18 @@ pub struct CompletionRequest {
     pub instructions: Option<String>,
     pub prompt: String,
     pub model: ModelTier,
+    pub routing_mode: RoutingMode,
     pub max_output_tokens: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CompletionResponse {
     pub content: String,
-    pub selected_model: ModelTier,
-    pub upstream_model: String,
+    pub requested_model: ModelTier,
+    pub selected_model: String,
+    pub routing_mode: RoutingMode,
+    pub routing_reason: Option<String>,
+    pub classifier_confidence: Option<f64>,
     pub usage: Option<TokenUsage>,
 }
 
@@ -118,9 +131,12 @@ pub struct TokenUsage {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StreamEvent {
     Metadata {
-        selected_model: ModelTier,
-        upstream_model: String,
+        requested_model: ModelTier,
+        selected_model: String,
+        routing_mode: RoutingMode,
         route: String,
+        routing_reason: Option<String>,
+        classifier_confidence: Option<f64>,
     },
     Delta {
         text: String,
@@ -198,7 +214,7 @@ impl ModelRouter for SwitchyardRouter {
     ) -> Result<CompletionResponse, RouterError> {
         let endpoint = format!("{}/v1/chat/completions", self.base_url);
         let payload = SwitchyardRequest {
-            model: request.model.route_id(),
+            model: request.route_id(),
             messages: request_messages(&request),
             stream: false,
             stream_options: None,
@@ -218,6 +234,9 @@ impl ModelRouter for SwitchyardRouter {
             return Err(RouterError::Rejected);
         }
 
+        let selected_model = selected_model_from_headers(response.headers());
+        let routing_reason = routing_reason_from_headers(response.headers());
+        let classifier_confidence = routing_reason.as_deref().and_then(parse_confidence);
         let response: SwitchyardResponse = response
             .json()
             .await
@@ -230,10 +249,18 @@ impl ModelRouter for SwitchyardRouter {
             .filter(|content| !content.trim().is_empty())
             .ok_or(RouterError::InvalidResponse)?;
 
+        let selected_model = selected_model.unwrap_or(response.model);
+        let routing_reason = Some(
+            routing_reason
+                .unwrap_or_else(|| fallback_routing_reason(request.routing_mode, &selected_model)),
+        );
         Ok(CompletionResponse {
             content,
-            selected_model: request.model,
-            upstream_model: response.model,
+            requested_model: request.model,
+            selected_model,
+            routing_mode: request.routing_mode,
+            routing_reason,
+            classifier_confidence,
             usage: response.usage.map(Into::into),
         })
     }
@@ -241,7 +268,7 @@ impl ModelRouter for SwitchyardRouter {
     async fn stream(&self, request: CompletionRequest) -> Result<RouterStream, RouterError> {
         let endpoint = format!("{}/v1/chat/completions", self.base_url);
         let payload = SwitchyardRequest {
-            model: request.model.route_id(),
+            model: request.route_id(),
             messages: request_messages(&request),
             stream: true,
             stream_options: Some(StreamOptions {
@@ -263,17 +290,27 @@ impl ModelRouter for SwitchyardRouter {
             return Err(RouterError::Rejected);
         }
 
-        let selected_model = request.model;
-        let upstream_model = selected_model_from_headers(response.headers())
-            .unwrap_or_else(|| selected_model.model_id().to_owned());
-        let route = selected_model.route_id().to_owned();
+        let requested_model = request.model;
+        let selected_model = selected_model_from_headers(response.headers())
+            .unwrap_or_else(|| requested_model.model_id().to_owned());
+        let routing_reason = routing_reason_from_headers(response.headers());
+        let classifier_confidence = routing_reason.as_deref().and_then(parse_confidence);
+        let routing_mode = request.routing_mode;
+        let route = request.route_id().to_owned();
+        let routing_reason = Some(
+            routing_reason
+                .unwrap_or_else(|| fallback_routing_reason(routing_mode, &selected_model)),
+        );
         let mut bytes = response.bytes_stream();
 
         let stream = async_stream::try_stream! {
             yield StreamEvent::Metadata {
+                requested_model,
                 selected_model,
-                upstream_model,
+                routing_mode,
                 route,
+                routing_reason,
+                classifier_confidence,
             };
 
             let mut buffer = Vec::new();
@@ -394,6 +431,43 @@ fn selected_model_from_headers(headers: &reqwest::header::HeaderMap) -> Option<S
     .find_map(|name| headers.get(name)?.to_str().ok().map(str::to_owned))
 }
 
+fn routing_reason_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    headers
+        .get("x-model-router-rationale")?
+        .to_str()
+        .ok()
+        .map(str::to_owned)
+}
+
+fn parse_confidence(reason: &str) -> Option<f64> {
+    let start = reason.find("confidence")? + "confidence".len();
+    let value = reason[start..]
+        .trim_start_matches(|character: char| {
+            character.is_whitespace() || matches!(character, ':' | '=' | '(')
+        })
+        .split(|character: char| !(character.is_ascii_digit() || character == '.'))
+        .next()?;
+    value.parse().ok()
+}
+
+fn fallback_routing_reason(mode: RoutingMode, selected_model: &str) -> String {
+    match mode {
+        RoutingMode::Auto => {
+            format!("Switchyard selected {selected_model}; classifier details were not returned")
+        }
+        RoutingMode::Manual => format!("The DM manually selected {selected_model}"),
+    }
+}
+
+impl CompletionRequest {
+    fn route_id(&self) -> &'static str {
+        match self.routing_mode {
+            RoutingMode::Auto => AUTO_ROUTE,
+            RoutingMode::Manual => self.model.route_id(),
+        }
+    }
+}
+
 fn find_sse_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
     let line_feed = buffer.windows(2).position(|window| window == b"\n\n");
     let carriage_return = buffer.windows(4).position(|window| window == b"\r\n\r\n");
@@ -481,15 +555,24 @@ pub mod testing {
         }
 
         async fn stream(&self, request: CompletionRequest) -> Result<RouterStream, RouterError> {
+            let requested_model = request.model;
+            let routing_mode = request.routing_mode;
             self.calls
                 .lock()
                 .expect("calls lock poisoned")
                 .push(request);
             let events = vec![
                 Ok(StreamEvent::Metadata {
-                    selected_model: self.response.selected_model,
-                    upstream_model: self.response.upstream_model.clone(),
-                    route: self.response.selected_model.route_id().to_owned(),
+                    requested_model,
+                    selected_model: self.response.selected_model.clone(),
+                    routing_mode,
+                    route: match routing_mode {
+                        RoutingMode::Auto => AUTO_ROUTE,
+                        RoutingMode::Manual => requested_model.route_id(),
+                    }
+                    .to_owned(),
+                    routing_reason: self.response.routing_reason.clone(),
+                    classifier_confidence: self.response.classifier_confidence,
                 }),
                 Ok(StreamEvent::Delta {
                     text: self.response.content.clone(),
@@ -510,6 +593,22 @@ mod adapter_tests {
     };
 
     use super::*;
+
+    #[test]
+    fn auto_requests_use_classifier_route_and_parse_receipt_confidence() {
+        let request = CompletionRequest {
+            instructions: None,
+            prompt: "question".into(),
+            model: ModelTier::Mini,
+            routing_mode: RoutingMode::Auto,
+            max_output_tokens: 100,
+        };
+        assert_eq!(request.route_id(), "dungeon-router/auto");
+        assert_eq!(
+            parse_confidence("llm_classifier selected nano (confidence 0.91)"),
+            Some(0.91)
+        );
+    }
 
     #[tokio::test]
     async fn switchyard_adapter_uses_the_manual_route_and_maps_usage() {
@@ -541,13 +640,14 @@ mod adapter_tests {
                 instructions: None,
                 prompt: "Resolve this interaction".into(),
                 model: ModelTier::Gpt5,
+                routing_mode: RoutingMode::Manual,
                 max_output_tokens: 700,
             })
             .await
             .expect("mock completion should succeed");
 
-        assert_eq!(response.selected_model, ModelTier::Gpt5);
-        assert_eq!(response.upstream_model, "gpt-5-2025-08-07");
+        assert_eq!(response.requested_model, ModelTier::Gpt5);
+        assert_eq!(response.selected_model, "gpt-5-2025-08-07");
         assert_eq!(response.content, "A defensible ruling");
         let usage = response.usage.expect("usage should be mapped");
         assert_eq!(usage.input_tokens, 42);
@@ -573,6 +673,7 @@ mod adapter_tests {
                 instructions: None,
                 prompt: "question".into(),
                 model: ModelTier::Nano,
+                routing_mode: RoutingMode::Manual,
                 max_output_tokens: 100,
             })
             .await
@@ -612,6 +713,7 @@ mod adapter_tests {
                 instructions: None,
                 prompt: "What does prone do?".into(),
                 model: ModelTier::Mini,
+                routing_mode: RoutingMode::Manual,
                 max_output_tokens: 300,
             })
             .await
@@ -621,7 +723,7 @@ mod adapter_tests {
 
         assert!(matches!(
             &events[0],
-            Ok(StreamEvent::Metadata { upstream_model, .. }) if upstream_model == "gpt-5-mini"
+            Ok(StreamEvent::Metadata { selected_model, .. }) if selected_model == "gpt-5-mini"
         ));
         assert!(matches!(&events[1], Ok(StreamEvent::Delta { text }) if text == "Prone "));
         assert!(

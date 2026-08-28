@@ -2,10 +2,11 @@ import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 
 type Health = { service: string; status: "ok" | "degraded"; database: "connected" | "unavailable" };
 type ModelTier = "nano" | "mini" | "gpt-5";
+type RoutingChoice = "auto" | ModelTier;
 type RunState = "idle" | "connecting" | "streaming" | "complete" | "stopped" | "error";
 type ModelDescriptor = { tier: ModelTier; label: string; model_id: string; purpose: string };
 type StreamPayload =
-  | { type: "metadata"; selected_model: ModelTier; upstream_model: string; route: string }
+  | { type: "metadata"; requested_model: ModelTier; selected_model: string; routing_mode: "auto" | "manual"; route: string; routing_reason: string | null; classifier_confidence: number | null }
   | { type: "delta"; text: string }
   | { type: "usage"; usage: { total_tokens: number } }
   | { type: "done" };
@@ -27,11 +28,13 @@ export function App() {
   const [healthError, setHealthError] = useState(false);
   const [models, setModels] = useState(FALLBACK_MODELS);
   const [question, setQuestion] = useState("");
-  const [model, setModel] = useState<ModelTier>("nano");
+  const [model, setModel] = useState<RoutingChoice>("auto");
   const [answer, setAnswer] = useState("");
   const [runState, setRunState] = useState<RunState>("idle");
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [route, setRoute] = useState<string | null>(null);
+  const [routingReason, setRoutingReason] = useState<string | null>(null);
+  const [classifierConfidence, setClassifierConfidence] = useState<number | null>(null);
   const [tokens, setTokens] = useState<number | null>(null);
   const [elapsedMs, setElapsedMs] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -59,7 +62,7 @@ export function App() {
   useEffect(() => () => controller.current?.abort(), []);
   const isRunning = runState === "connecting" || runState === "streaming";
   const status = health?.status === "ok" ? "API connected" : healthError ? "API unavailable" : "Checking API";
-  const chosenModel = models.find((item) => item.tier === model);
+  const chosenModel = model === "auto" ? null : models.find((item) => item.tier === model);
 
   async function ask(event?: FormEvent) {
     event?.preventDefault();
@@ -68,14 +71,14 @@ export function App() {
     const abortController = new AbortController();
     controller.current = abortController;
     const startedAt = performance.now();
-    setAnswer(""); setSelectedModel(null); setRoute(null); setTokens(null); setElapsedMs(null); setMessage(null);
+    setAnswer(""); setSelectedModel(null); setRoute(null); setRoutingReason(null); setClassifierConfidence(null); setTokens(null); setElapsedMs(null); setMessage(null);
     setSources([]); setCitationValidation(null); setActiveSource(null);
     setRunState("connecting");
     try {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ prompt: question.trim(), model, max_output_tokens: 800 }),
+        body: JSON.stringify({ prompt: question.trim(), model: model === "auto" ? "mini" : model, routing_mode: model === "auto" ? "auto" : "manual", max_output_tokens: 800 }),
         signal: abortController.signal,
       });
       if (!response.ok) {
@@ -98,7 +101,7 @@ export function App() {
           return;
         }
         const payload = JSON.parse(data) as StreamPayload;
-        if (payload.type === "metadata") { setSelectedModel(payload.upstream_model); setRoute(payload.route); }
+        if (payload.type === "metadata") { setSelectedModel(payload.selected_model); setRoute(payload.route); setRoutingReason(payload.routing_reason); setClassifierConfidence(payload.classifier_confidence); }
         else if (payload.type === "delta") setAnswer((current) => current + payload.text);
         else if (payload.type === "usage") setTokens(payload.usage.total_tokens);
       });
@@ -135,8 +138,8 @@ export function App() {
       <div className="status" role="status" aria-live="polite"><span className={health?.status === "ok" ? "dot dot--ok" : "dot"}/><span>{status}</span>{health?.database === "connected" && <span className="muted">SQLite ready</span>}</div></header>
     <form className="ask" onSubmit={(event) => void ask(event)}><label htmlFor="question">Query the archive</label>
       <textarea id="question" name="question" placeholder="What does the prone condition do?" rows={5} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={isRunning}/>
-      <div className="route-picker"><div><span className="field-label">Attunement</span><p>{chosenModel?.purpose}</p></div>
-        <select aria-label="Model selection" value={model} onChange={(event) => setModel(event.target.value as ModelTier)} disabled={isRunning}>{models.map((item) => <option key={item.tier} value={item.tier}>{item.label} · {item.model_id}</option>)}</select></div>
+      <div className="route-picker"><div><span className="field-label">Attunement</span><p>{model === "auto" ? "Switchyard selects the cheapest capable model" : chosenModel?.purpose}</p></div>
+        <select aria-label="Model selection" value={model} onChange={(event) => setModel(event.target.value as RoutingChoice)} disabled={isRunning}><option value="auto">Auto · cost-aware</option>{models.map((item) => <option key={item.tier} value={item.tier}>{item.label} · {item.model_id}</option>)}</select></div>
       <div className="actions"><span className="hint">Enter to ask · Shift+Enter for a new line</span>{isRunning ? <button type="button" className="stop" onClick={() => controller.current?.abort()}>Stop</button> : <button type="submit" disabled={!question.trim() || health?.status !== "ok"}>Ask</button>}</div>
     </form>
     <section className="result" aria-labelledby="answer-heading" aria-busy={isRunning}><div className="result-heading"><h2 id="answer-heading">Ruling</h2><span className={`run-state run-state--${runState}`}>{runState}</span></div>
@@ -145,6 +148,7 @@ export function App() {
       {citationValidation?.missing_required ? <p className="message message--error">This answer did not cite its retrieved evidence. Treat it as unverified.</p> : null}
       {message && <p className={runState === "error" ? "message message--error" : "message"}>{message}</p>}
       <dl className="metadata"><div><dt>Model</dt><dd>{selectedModel ?? "—"}</dd></div><div><dt>Route</dt><dd>{route ?? "—"}</dd></div><div><dt>Tokens</dt><dd>{tokens ?? "—"}</dd></div><div><dt>Time</dt><dd>{elapsedMs === null ? "—" : `${(elapsedMs / 1000).toFixed(1)}s`}</dd></div></dl>
+      {routingReason && <p className="routing-reason"><strong>Why this model:</strong> {routingReason}{classifierConfidence !== null ? ` · ${Math.round(classifierConfidence * 100)}% confidence` : ""}</p>}
     </section>
     {sources.length > 0 && <section className="sources" aria-labelledby="sources-heading"><div className="sources-heading"><h2 id="sources-heading">Sources</h2><span>{sources.length} retrieved</span></div>
       <div className="source-list">{sources.map((source) => <button type="button" className="source-card" key={source.citation_id} onClick={() => void openSource(source)}><span className="source-id">{source.citation_id}</span><span><strong>{source.section_path}</strong><small>{source.excerpt}</small></span></button>)}</div>
