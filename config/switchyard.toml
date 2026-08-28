@@ -1,0 +1,35 @@
+schema_version = 1
+
+[llm_clients.openai]
+format = "openai_responses"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_retries = 1
+
+[targets.nano]
+id = "gpt-5-nano"
+llm_client = "openai"
+
+[targets.mini]
+id = "gpt-5-mini"
+llm_client = "openai"
+
+[targets.gpt5]
+id = "gpt-5"
+llm_client = "openai"
+
+[routes.nano]
+id = "dungeon-router/nano"
+type = "passthrough"
+target = "nano"
+
+[routes.mini]
+id = "dungeon-router/mini"
+type = "passthrough"
+target = "mini"
+
+[routes.gpt5]
+id = "dungeon-router/gpt-5"
+type = "passthrough"
+target = "gpt5"
+

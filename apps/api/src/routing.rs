@@ -1,0 +1,384 @@
+use std::{fmt, sync::Arc, time::Duration};
+
+use async_trait::async_trait;
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use reqwest::Client;
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+const NANO_ROUTE: &str = "dungeon-router/nano";
+const MINI_ROUTE: &str = "dungeon-router/mini";
+const GPT5_ROUTE: &str = "dungeon-router/gpt-5";
+
+pub type SharedModelRouter = Arc<dyn ModelRouter>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelTier {
+    Nano,
+    Mini,
+    #[serde(rename = "gpt-5")]
+    Gpt5,
+}
+
+impl ModelTier {
+    pub const ALL: [Self; 3] = [Self::Nano, Self::Mini, Self::Gpt5];
+
+    pub const fn model_id(self) -> &'static str {
+        match self {
+            Self::Nano => "gpt-5-nano",
+            Self::Mini => "gpt-5-mini",
+            Self::Gpt5 => "gpt-5",
+        }
+    }
+
+    pub const fn route_id(self) -> &'static str {
+        match self {
+            Self::Nano => NANO_ROUTE,
+            Self::Mini => MINI_ROUTE,
+            Self::Gpt5 => GPT5_ROUTE,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Nano => "Nano",
+            Self::Mini => "Mini",
+            Self::Gpt5 => "GPT-5",
+        }
+    }
+
+    pub const fn purpose(self) -> &'static str {
+        match self {
+            Self::Nano => "Direct lookup and short grounded answers",
+            Self::Mini => "Multi-rule explanation and ordinary adjudication",
+            Self::Gpt5 => "Difficult reasoning and ambiguous interactions",
+        }
+    }
+}
+
+impl fmt::Display for ModelTier {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ModelDescriptor {
+    pub tier: ModelTier,
+    pub label: &'static str,
+    pub model_id: &'static str,
+    pub purpose: &'static str,
+}
+
+pub fn model_catalog() -> Vec<ModelDescriptor> {
+    ModelTier::ALL
+        .into_iter()
+        .map(|tier| ModelDescriptor {
+            tier,
+            label: tier.label(),
+            model_id: tier.model_id(),
+            purpose: tier.purpose(),
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone)]
+pub struct CompletionRequest {
+    pub prompt: String,
+    pub model: ModelTier,
+    pub max_output_tokens: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CompletionResponse {
+    pub content: String,
+    pub selected_model: ModelTier,
+    pub upstream_model: String,
+    pub usage: Option<TokenUsage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+#[derive(Debug, Error)]
+pub enum RouterError {
+    #[error("the model router is unavailable")]
+    Unavailable,
+    #[error("the model provider rejected the request")]
+    Rejected,
+    #[error("the model router returned an invalid response")]
+    InvalidResponse,
+}
+
+impl IntoResponse for RouterError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Self::Rejected => StatusCode::BAD_GATEWAY,
+            Self::Unavailable | Self::InvalidResponse => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        (
+            status,
+            Json(ErrorBody {
+                error: self.to_string(),
+            }),
+        )
+            .into_response()
+    }
+}
+
+#[derive(Serialize)]
+struct ErrorBody {
+    error: String,
+}
+
+#[async_trait]
+pub trait ModelRouter: Send + Sync {
+    async fn complete(&self, request: CompletionRequest)
+    -> Result<CompletionResponse, RouterError>;
+}
+
+#[derive(Clone)]
+pub struct SwitchyardRouter {
+    client: Client,
+    base_url: String,
+}
+
+impl SwitchyardRouter {
+    pub fn new(base_url: impl Into<String>) -> Result<Self, reqwest::Error> {
+        let client = Client::builder().timeout(Duration::from_secs(90)).build()?;
+        Ok(Self::with_client(base_url, client))
+    }
+
+    pub fn with_client(base_url: impl Into<String>, client: Client) -> Self {
+        Self {
+            client,
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+        }
+    }
+}
+
+#[async_trait]
+impl ModelRouter for SwitchyardRouter {
+    async fn complete(
+        &self,
+        request: CompletionRequest,
+    ) -> Result<CompletionResponse, RouterError> {
+        let endpoint = format!("{}/v1/chat/completions", self.base_url);
+        let payload = SwitchyardRequest {
+            model: request.model.route_id(),
+            messages: vec![ChatMessage {
+                role: "user",
+                content: &request.prompt,
+            }],
+            stream: false,
+            max_completion_tokens: request.max_output_tokens,
+        };
+
+        let response = self
+            .client
+            .post(endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|_| RouterError::Unavailable)?;
+
+        if !response.status().is_success() {
+            tracing::warn!(status = %response.status(), "Switchyard rejected completion request");
+            return Err(RouterError::Rejected);
+        }
+
+        let response: SwitchyardResponse = response
+            .json()
+            .await
+            .map_err(|_| RouterError::InvalidResponse)?;
+        let content = response
+            .choices
+            .into_iter()
+            .next()
+            .map(|choice| choice.message.content)
+            .filter(|content| !content.trim().is_empty())
+            .ok_or(RouterError::InvalidResponse)?;
+
+        Ok(CompletionResponse {
+            content,
+            selected_model: request.model,
+            upstream_model: response.model,
+            usage: response.usage.map(Into::into),
+        })
+    }
+}
+
+#[derive(Serialize)]
+struct SwitchyardRequest<'a> {
+    model: &'static str,
+    messages: Vec<ChatMessage<'a>>,
+    stream: bool,
+    max_completion_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct ChatMessage<'a> {
+    role: &'static str,
+    content: &'a str,
+}
+
+#[derive(Deserialize)]
+struct SwitchyardResponse {
+    model: String,
+    choices: Vec<Choice>,
+    usage: Option<SwitchyardUsage>,
+}
+
+#[derive(Deserialize)]
+struct Choice {
+    message: AssistantMessage,
+}
+
+#[derive(Deserialize)]
+struct AssistantMessage {
+    content: String,
+}
+
+#[derive(Deserialize)]
+struct SwitchyardUsage {
+    prompt_tokens: u64,
+    completion_tokens: u64,
+    total_tokens: u64,
+}
+
+impl From<SwitchyardUsage> for TokenUsage {
+    fn from(value: SwitchyardUsage) -> Self {
+        Self {
+            input_tokens: value.prompt_tokens,
+            output_tokens: value.completion_tokens,
+            total_tokens: value.total_tokens,
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod testing {
+    use std::sync::Mutex;
+
+    use super::*;
+
+    pub struct MockRouter {
+        calls: Mutex<Vec<CompletionRequest>>,
+        response: CompletionResponse,
+    }
+
+    impl MockRouter {
+        pub fn new(response: CompletionResponse) -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+                response,
+            }
+        }
+
+        pub fn calls(&self) -> Vec<CompletionRequest> {
+            self.calls.lock().expect("calls lock poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl ModelRouter for MockRouter {
+        async fn complete(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse, RouterError> {
+            self.calls
+                .lock()
+                .expect("calls lock poisoned")
+                .push(request);
+            Ok(self.response.clone())
+        }
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{body_partial_json, method, path},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn switchyard_adapter_uses_the_manual_route_and_maps_usage() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_partial_json(json!({
+                "model": "dungeon-router/gpt-5",
+                "messages": [{"role": "user", "content": "Resolve this interaction"}],
+                "stream": false,
+                "max_completion_tokens": 700
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "model": "gpt-5-2025-08-07",
+                "choices": [{"message": {"content": "A defensible ruling"}}],
+                "usage": {
+                    "prompt_tokens": 42,
+                    "completion_tokens": 18,
+                    "total_tokens": 60
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let router = SwitchyardRouter::new(server.uri()).expect("HTTP client should build");
+        let response = router
+            .complete(CompletionRequest {
+                prompt: "Resolve this interaction".into(),
+                model: ModelTier::Gpt5,
+                max_output_tokens: 700,
+            })
+            .await
+            .expect("mock completion should succeed");
+
+        assert_eq!(response.selected_model, ModelTier::Gpt5);
+        assert_eq!(response.upstream_model, "gpt-5-2025-08-07");
+        assert_eq!(response.content, "A defensible ruling");
+        let usage = response.usage.expect("usage should be mapped");
+        assert_eq!(usage.input_tokens, 42);
+        assert_eq!(usage.output_tokens, 18);
+        assert_eq!(usage.total_tokens, 60);
+    }
+
+    #[tokio::test]
+    async fn switchyard_adapter_does_not_leak_upstream_error_bodies() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string("secret upstream diagnostic must not escape"),
+            )
+            .mount(&server)
+            .await;
+
+        let router = SwitchyardRouter::new(server.uri()).expect("HTTP client should build");
+        let error = router
+            .complete(CompletionRequest {
+                prompt: "question".into(),
+                model: ModelTier::Nano,
+                max_output_tokens: 100,
+            })
+            .await
+            .expect_err("upstream rejection should fail");
+
+        assert_eq!(error.to_string(), "the model provider rejected the request");
+    }
+}

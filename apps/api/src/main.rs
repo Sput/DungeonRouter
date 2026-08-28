@@ -1,7 +1,7 @@
-use std::{env, net::SocketAddr, path::Path};
+use std::{env, net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
-use dungeon_router_api::{AppState, app};
+use dungeon_router_api::{AppState, app, routing::SwitchyardRouter};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::net::TcpListener;
 use tracing::info;
@@ -19,6 +19,8 @@ async fn main() -> Result<()> {
         .context("APP_PORT must be a valid port")?;
     let database_url = env::var("DATABASE_URL")
         .unwrap_or_else(|_| "sqlite://data/dungeon-router.db?mode=rwc".into());
+    let switchyard_base_url =
+        env::var("SWITCHYARD_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:4100".into());
 
     if let Some(path) = sqlite_parent_path(&database_url) {
         tokio::fs::create_dir_all(path)
@@ -40,6 +42,11 @@ async fn main() -> Result<()> {
         .await
         .context("failed to run database migrations")?;
 
+    let router = Arc::new(
+        SwitchyardRouter::new(switchyard_base_url)
+            .context("failed to initialize Switchyard HTTP client")?,
+    );
+
     let address: SocketAddr = format!("{host}:{port}")
         .parse()
         .context("APP_HOST and APP_PORT must form a valid socket address")?;
@@ -48,7 +55,7 @@ async fn main() -> Result<()> {
         .context("failed to bind API listener")?;
 
     info!(%address, "DungeonRouter API listening");
-    axum::serve(listener, app(AppState { db }))
+    axum::serve(listener, app(AppState { db, router }))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("API server exited unexpectedly")?;
