@@ -13,6 +13,7 @@ use routing::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::time::Instant;
 use tower_http::{
     cors::CorsLayer,
     trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer},
@@ -24,11 +25,13 @@ pub mod notes;
 pub mod routing;
 pub mod search;
 pub mod srd;
+pub mod usage;
 
 #[derive(Clone)]
 pub struct AppState {
     pub db: SqlitePool,
     pub router: SharedModelRouter,
+    pub costs: usage::CostConfig,
 }
 
 #[derive(Debug, Serialize)]
@@ -41,7 +44,11 @@ pub struct HealthResponse {
 pub fn app(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        .route("/api/config/public", get(public_config))
         .route("/api/models", get(models))
+        .route("/api/activity", get(activity))
+        .route("/api/usage/summary", get(usage_summary))
+        .route("/api/usage/daily", get(daily_usage))
         .route("/api/search", get(search_rules))
         .route("/api/sources/{chunk_id}", get(source_passage))
         .route("/api/notes", get(list_notes).post(create_note))
@@ -61,6 +68,71 @@ pub fn app(state: AppState) -> Router {
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
+}
+
+#[derive(Serialize)]
+struct PublicConfig {
+    monthly_cost_warning_usd: f64,
+    monthly_cost_hard_limit_usd: f64,
+    pricing_version: &'static str,
+}
+
+async fn public_config(State(state): State<AppState>) -> Json<PublicConfig> {
+    Json(PublicConfig {
+        monthly_cost_warning_usd: state.costs.monthly_warning_usd,
+        monthly_cost_hard_limit_usd: state.costs.monthly_hard_limit_usd,
+        pricing_version: usage::PRICING_VERSION,
+    })
+}
+
+#[derive(Deserialize)]
+struct ActivityQuery {
+    limit: Option<u32>,
+}
+
+async fn activity(
+    State(state): State<AppState>,
+    Query(query): Query<ActivityQuery>,
+) -> Result<Json<Vec<usage::ActivityItem>>, UsageApiError> {
+    let limit = query.limit.unwrap_or(20).clamp(1, 100);
+    Ok(Json(usage::activity(&state.db, limit).await?))
+}
+
+async fn usage_summary(
+    State(state): State<AppState>,
+) -> Result<Json<usage::UsageSummary>, UsageApiError> {
+    Ok(Json(usage::summary(&state.db, &state.costs).await?))
+}
+
+async fn daily_usage(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<usage::DailyUsage>>, UsageApiError> {
+    Ok(Json(usage::daily(&state.db).await?))
+}
+
+struct UsageApiError(usage::UsageError);
+
+impl From<usage::UsageError> for UsageApiError {
+    fn from(value: usage::UsageError) -> Self {
+        Self(value)
+    }
+}
+
+impl axum::response::IntoResponse for UsageApiError {
+    fn into_response(self) -> axum::response::Response {
+        let status = match self.0 {
+            usage::UsageError::BudgetExceeded => StatusCode::PAYMENT_REQUIRED,
+            usage::UsageError::InvalidConfiguration => StatusCode::INTERNAL_SERVER_ERROR,
+            usage::UsageError::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+        };
+        (
+            status,
+            Json(ApiErrorBody {
+                error: self.0.to_string(),
+            }),
+        )
+            .into_response()
+    }
 }
 
 async fn list_notes(
@@ -239,6 +311,11 @@ async fn chat(
     State(state): State<AppState>,
     Json(request): Json<ManualCompletionRequest>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, RouterApiError> {
+    usage::enforce_budget(&state.db, &state.costs)
+        .await
+        .map_err(UsageApiError)
+        .map_err(RouterApiError::Usage)?;
+    let started_at = Instant::now();
     let request = validate_request(request)?;
     let grounded = crate::chat::prepare(
         &state.db,
@@ -255,9 +332,16 @@ async fn chat(
         let sources = grounded.sources;
         let source_count = sources.len();
         let mut upstream = state.router.stream(grounded.completion).await?;
+        let usage_db = state.db.clone();
+        let cost_config = state.costs.clone();
         Box::pin(async_stream::stream! {
             yield Ok(sse_json("sources", &sources));
             let mut answer = String::new();
+            let mut selected_model = "unknown".to_owned();
+            let mut routing_mode = RoutingMode::Manual;
+            let mut routing_reason: Option<String> = None;
+            let mut classifier_confidence = None;
+            let mut token_usage = None;
             while let Some(result) = upstream.next().await {
                 match result {
                     Ok(StreamEvent::Delta { text }) => {
@@ -265,8 +349,16 @@ async fn chat(
                         yield Ok(stream_event(StreamEvent::Delta { text }));
                     }
                     Ok(StreamEvent::Done) => {}
-                    Ok(event) => yield Ok(stream_event(event)),
+                    Ok(StreamEvent::Metadata { requested_model, selected_model: model, routing_mode: mode, route, routing_reason: reason, classifier_confidence: confidence }) => {
+                        selected_model = model.clone(); routing_mode = mode; routing_reason = reason.clone(); classifier_confidence = confidence;
+                        yield Ok(stream_event(StreamEvent::Metadata { requested_model, selected_model: model, routing_mode: mode, route, routing_reason: reason, classifier_confidence: confidence }));
+                    }
+                    Ok(StreamEvent::Usage { usage }) => {
+                        token_usage = Some(usage.clone());
+                        yield Ok(stream_event(StreamEvent::Usage { usage }));
+                    }
                     Err(error) => {
+                        let _ = usage::record(&usage_db, &cost_config, usage::RunRecord { routing_mode, selected_model: &selected_model, selection_reason: routing_reason.as_deref(), classifier_confidence, usage: token_usage.as_ref(), latency_ms: started_at.elapsed().as_millis() as u64, status: "failed" }).await;
                         yield Ok(sse_json("error", &ApiErrorBody { error: error.to_string() }));
                         return;
                     }
@@ -274,6 +366,7 @@ async fn chat(
             }
             let validation = crate::chat::validate_citations(&answer, source_count);
             yield Ok(sse_json("citation_validation", &validation));
+            let _ = usage::record(&usage_db, &cost_config, usage::RunRecord { routing_mode, selected_model: &selected_model, selection_reason: routing_reason.as_deref(), classifier_confidence, usage: token_usage.as_ref(), latency_ms: started_at.elapsed().as_millis() as u64, status: "completed" }).await;
             yield Ok(stream_event(StreamEvent::Done));
         })
     } else {
@@ -343,6 +436,7 @@ enum RouterApiError {
     InvalidPrompt(String),
     Router(RouterError),
     Search(SearchApiError),
+    Usage(UsageApiError),
 }
 
 impl From<RouterError> for RouterApiError {
@@ -359,6 +453,7 @@ impl axum::response::IntoResponse for RouterApiError {
             }
             Self::Router(error) => error.into_response(),
             Self::Search(error) => error.into_response(),
+            Self::Usage(error) => error.into_response(),
         }
     }
 }
@@ -411,12 +506,16 @@ mod tests {
             .connect("sqlite::memory:")
             .await
             .expect("in-memory database should open");
-        AppState { db, router }
+        sqlx::migrate!("./migrations").run(&db).await.unwrap();
+        AppState {
+            db,
+            router,
+            costs: usage::CostConfig::default(),
+        }
     }
 
     async fn searchable_test_state(router: SharedModelRouter) -> AppState {
         let state = test_state(router).await;
-        sqlx::migrate!("./migrations").run(&state.db).await.unwrap();
         ingest_snapshot(
             &state.db,
             &SrdSnapshot {

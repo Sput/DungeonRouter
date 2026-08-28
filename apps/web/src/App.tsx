@@ -17,6 +17,7 @@ type GroundedSource = {
 type SourceChunk = GroundedSource & { content: string; heading: string };
 type CitationValidation = { cited: string[]; unsupported: string[]; missing_required: boolean };
 type CampaignNote = { id: number; title: string; filename: string; chunk_count: number; created_at: string };
+type UsageSummary = { total_questions: number; actual_cost_usd: number; always_gpt5_cost_usd: number; estimated_savings_usd: number; estimated_savings_percent: number; automatic_requests: number; manual_requests: number; requests_by_model: { model: string; requests: number; average_latency_ms: number }[]; warning_threshold_usd: number; hard_limit_usd: number; budget_status: "ok" | "warning" | "stopped"; pricing_version: string };
 
 const FALLBACK_MODELS: ModelDescriptor[] = [
   { tier: "nano", label: "Nano", model_id: "gpt-5-nano", purpose: "Direct lookup and short grounded answers" },
@@ -45,6 +46,7 @@ export function App() {
   const [notes, setNotes] = useState<CampaignNote[]>([]);
   const [noteMessage, setNoteMessage] = useState<string | null>(null);
   const [notesBusy, setNotesBusy] = useState(false);
+  const [usageSummary, setUsageSummary] = useState<UsageSummary | null>(null);
   const controller = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -66,9 +68,15 @@ export function App() {
   }, []);
 
   useEffect(() => () => controller.current?.abort(), []);
+  useEffect(() => { void refreshUsage(); }, []);
   const isRunning = runState === "connecting" || runState === "streaming";
   const status = health?.status === "ok" ? "API connected" : healthError ? "API unavailable" : "Checking API";
   const chosenModel = model === "auto" ? null : models.find((item) => item.tier === model);
+
+  async function refreshUsage() {
+    const response = await fetch("/api/usage/summary").catch(() => null);
+    if (response?.ok) setUsageSummary(await response.json() as UsageSummary);
+  }
 
   async function ask(event?: FormEvent) {
     event?.preventDefault();
@@ -113,6 +121,7 @@ export function App() {
       });
       setElapsedMs(Math.round(performance.now() - startedAt));
       setRunState("complete");
+      await refreshUsage();
     } catch (error) {
       setElapsedMs(Math.round(performance.now() - startedAt));
       if (abortController.signal.aborted) {
@@ -195,6 +204,10 @@ export function App() {
     <section className="notes" aria-labelledby="notes-heading"><div className="notes-heading"><div><h2 id="notes-heading">Campaign notes</h2><p>Private local context sent to OpenAI only when retrieved for an answer.</p></div><label className="upload-button">{notesBusy ? "Working…" : "Add note"}<input type="file" accept=".md,.markdown,.txt,text/plain,text/markdown" disabled={notesBusy} onChange={(event) => { void uploadNote(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label></div>
       {noteMessage && <p className="note-message" role="status">{noteMessage}</p>}
       {notes.length ? <ul className="note-list">{notes.map((note) => <li key={note.id}><span><strong>{note.title}</strong><small>{note.filename} · {note.chunk_count} {note.chunk_count === 1 ? "passage" : "passages"}</small></span><button type="button" className="delete-note" disabled={notesBusy} onClick={() => void deleteNote(note)}>Delete</button></li>)}</ul> : <p className="notes-empty">No campaign notes indexed yet. Markdown and text files up to 256 KiB are supported.</p>}
+    </section>
+    <section className="usage" aria-labelledby="usage-heading"><div className="usage-heading"><div><h2 id="usage-heading">Monthly usage</h2><p>Estimated from API token counts; provider billing may differ.</p></div><span className={`budget budget--${usageSummary?.budget_status ?? "ok"}`}>{usageSummary?.budget_status ?? "loading"}</span></div>
+      <dl className="usage-grid"><div><dt>Questions</dt><dd>{usageSummary?.total_questions ?? "—"}</dd></div><div><dt>Routed cost</dt><dd>{usageSummary ? `$${usageSummary.actual_cost_usd.toFixed(4)}` : "—"}</dd></div><div><dt>Always GPT-5</dt><dd>{usageSummary ? `$${usageSummary.always_gpt5_cost_usd.toFixed(4)}` : "—"}</dd></div><div><dt>Savings</dt><dd>{usageSummary ? `${usageSummary.estimated_savings_percent.toFixed(1)}%` : "—"}</dd></div></dl>
+      {usageSummary && <><div className="budget-track"><span style={{ width: `${Math.min(100, usageSummary.actual_cost_usd / usageSummary.hard_limit_usd * 100)}%` }}/></div><p className="budget-copy">${usageSummary.actual_cost_usd.toFixed(4)} of ${usageSummary.hard_limit_usd.toFixed(2)} hard limit · warning at ${usageSummary.warning_threshold_usd.toFixed(2)} · {usageSummary.automatic_requests} auto / {usageSummary.manual_requests} manual</p><div className="model-counts">{usageSummary.requests_by_model.map((item) => <span key={item.model}>{item.model}: {item.requests} · {(item.average_latency_ms / 1000).toFixed(1)}s avg</span>)}</div></>}
     </section>
   </section></main>;
 }

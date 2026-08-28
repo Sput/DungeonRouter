@@ -1,7 +1,9 @@
 use std::{env, net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
-use dungeon_router_api::{AppState, app, routing::SwitchyardRouter, srd::ensure_bundled_srd};
+use dungeon_router_api::{
+    AppState, app, routing::SwitchyardRouter, srd::ensure_bundled_srd, usage::CostConfig,
+};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::net::TcpListener;
 use tracing::info;
@@ -61,7 +63,8 @@ async fn main() -> Result<()> {
         .context("failed to bind API listener")?;
 
     info!(%address, "DungeonRouter API listening");
-    axum::serve(listener, app(AppState { db, router }))
+    let costs = CostConfig::from_env().context("failed to load cost controls")?;
+    axum::serve(listener, app(AppState { db, router, costs }))
         .with_graceful_shutdown(shutdown_signal())
         .await
         .context("API server exited unexpectedly")?;

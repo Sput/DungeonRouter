@@ -14,6 +14,7 @@ The repository currently contains the application foundation, manual model routi
 - grounded streamed answers with validated, inspectable SRD citations;
 - automatic cost-aware routing across Nano, Mini, and GPT-5;
 - local Markdown and text campaign-note indexing with labeled citations;
+- monthly usage accounting, configurable pricing, savings estimates, and a $20 hard stop;
 - shared local-development commands and environment configuration.
 
 ## Repository layout
@@ -81,6 +82,8 @@ pnpm build:web
 - [SRD data](docs/srd-data.md)
 - [Grounded chat](docs/grounded-chat.md)
 - [Campaign notes](docs/campaign-notes.md)
+- [Cost controls](docs/cost-controls.md)
+- [Evaluation set](evals/README.md)
 - [Contributing](CONTRIBUTING.md)
 - [SRD attribution](NOTICE.md)
 
