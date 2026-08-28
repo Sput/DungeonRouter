@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, pin::Pin, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use axum::{
@@ -10,11 +10,15 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+use futures_core::Stream;
+use futures_util::StreamExt;
+
 const NANO_ROUTE: &str = "dungeon-router/nano";
 const MINI_ROUTE: &str = "dungeon-router/mini";
 const GPT5_ROUTE: &str = "dungeon-router/gpt-5";
 
 pub type SharedModelRouter = Arc<dyn ModelRouter>;
+pub type RouterStream = Pin<Box<dyn Stream<Item = Result<StreamEvent, RouterError>> + Send>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -109,6 +113,23 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamEvent {
+    Metadata {
+        selected_model: ModelTier,
+        upstream_model: String,
+        route: String,
+    },
+    Delta {
+        text: String,
+    },
+    Usage {
+        usage: TokenUsage,
+    },
+    Done,
+}
+
 #[derive(Debug, Error)]
 pub enum RouterError {
     #[error("the model router is unavailable")]
@@ -144,6 +165,8 @@ struct ErrorBody {
 pub trait ModelRouter: Send + Sync {
     async fn complete(&self, request: CompletionRequest)
     -> Result<CompletionResponse, RouterError>;
+
+    async fn stream(&self, request: CompletionRequest) -> Result<RouterStream, RouterError>;
 }
 
 #[derive(Clone)]
@@ -180,6 +203,7 @@ impl ModelRouter for SwitchyardRouter {
                 content: &request.prompt,
             }],
             stream: false,
+            stream_options: None,
             max_completion_tokens: request.max_output_tokens,
         };
 
@@ -215,6 +239,77 @@ impl ModelRouter for SwitchyardRouter {
             usage: response.usage.map(Into::into),
         })
     }
+
+    async fn stream(&self, request: CompletionRequest) -> Result<RouterStream, RouterError> {
+        let endpoint = format!("{}/v1/chat/completions", self.base_url);
+        let payload = SwitchyardRequest {
+            model: request.model.route_id(),
+            messages: vec![ChatMessage {
+                role: "user",
+                content: &request.prompt,
+            }],
+            stream: true,
+            stream_options: Some(StreamOptions {
+                include_usage: true,
+            }),
+            max_completion_tokens: request.max_output_tokens,
+        };
+
+        let response = self
+            .client
+            .post(endpoint)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|_| RouterError::Unavailable)?;
+
+        if !response.status().is_success() {
+            tracing::warn!(status = %response.status(), "Switchyard rejected streaming request");
+            return Err(RouterError::Rejected);
+        }
+
+        let selected_model = request.model;
+        let upstream_model = selected_model_from_headers(response.headers())
+            .unwrap_or_else(|| selected_model.model_id().to_owned());
+        let route = selected_model.route_id().to_owned();
+        let mut bytes = response.bytes_stream();
+
+        let stream = async_stream::try_stream! {
+            yield StreamEvent::Metadata {
+                selected_model,
+                upstream_model,
+                route,
+            };
+
+            let mut buffer = Vec::new();
+            while let Some(chunk) = bytes.next().await {
+                let chunk = chunk.map_err(|_| RouterError::Unavailable)?;
+                buffer.extend_from_slice(&chunk);
+
+                while let Some((boundary, delimiter_length)) = find_sse_boundary(&buffer) {
+                    let frame = std::str::from_utf8(&buffer[..boundary])
+                        .map_err(|_| RouterError::InvalidResponse)?
+                        .to_owned();
+                    buffer.drain(..boundary + delimiter_length);
+                    if let Some(event) = parse_switchyard_frame(&frame)? {
+                        yield event;
+                    }
+                }
+            }
+
+            let trailing = std::str::from_utf8(&buffer).map_err(|_| RouterError::InvalidResponse)?;
+            let trailing_event = (!trailing.trim().is_empty())
+                .then(|| parse_switchyard_frame(trailing))
+                .transpose()?
+                .flatten();
+            if let Some(event) = trailing_event {
+                yield event;
+            }
+            yield StreamEvent::Done;
+        };
+
+        Ok(Box::pin(stream))
+    }
 }
 
 #[derive(Serialize)]
@@ -222,7 +317,14 @@ struct SwitchyardRequest<'a> {
     model: &'static str,
     messages: Vec<ChatMessage<'a>>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
     max_completion_tokens: u32,
+}
+
+#[derive(Serialize)]
+struct StreamOptions {
+    include_usage: bool,
 }
 
 #[derive(Serialize)]
@@ -253,6 +355,72 @@ struct SwitchyardUsage {
     prompt_tokens: u64,
     completion_tokens: u64,
     total_tokens: u64,
+}
+
+#[derive(Deserialize)]
+struct SwitchyardStreamChunk {
+    model: Option<String>,
+    #[serde(default)]
+    choices: Vec<StreamChoice>,
+    usage: Option<SwitchyardUsage>,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    delta: StreamDelta,
+}
+
+#[derive(Deserialize)]
+struct StreamDelta {
+    content: Option<String>,
+}
+
+fn selected_model_from_headers(headers: &reqwest::header::HeaderMap) -> Option<String> {
+    [
+        "x-model-router-selected-model",
+        "x-switchyard-selected-model",
+    ]
+    .into_iter()
+    .find_map(|name| headers.get(name)?.to_str().ok().map(str::to_owned))
+}
+
+fn find_sse_boundary(buffer: &[u8]) -> Option<(usize, usize)> {
+    let line_feed = buffer.windows(2).position(|window| window == b"\n\n");
+    let carriage_return = buffer.windows(4).position(|window| window == b"\r\n\r\n");
+    match (line_feed, carriage_return) {
+        (Some(lf), Some(crlf)) if lf < crlf => Some((lf, 2)),
+        (Some(_), Some(crlf)) => Some((crlf, 4)),
+        (Some(lf), None) => Some((lf, 2)),
+        (None, Some(crlf)) => Some((crlf, 4)),
+        (None, None) => None,
+    }
+}
+
+fn parse_switchyard_frame(frame: &str) -> Result<Option<StreamEvent>, RouterError> {
+    let data = frame
+        .lines()
+        .filter_map(|line| line.strip_prefix("data:"))
+        .map(str::trim_start)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if data.is_empty() || data == "[DONE]" {
+        return Ok(None);
+    }
+
+    let chunk: SwitchyardStreamChunk =
+        serde_json::from_str(&data).map_err(|_| RouterError::InvalidResponse)?;
+    if let Some(usage) = chunk.usage {
+        return Ok(Some(StreamEvent::Usage {
+            usage: usage.into(),
+        }));
+    }
+    let _reported_model = chunk.model;
+    Ok(chunk
+        .choices
+        .into_iter()
+        .find_map(|choice| choice.delta.content)
+        .filter(|content| !content.is_empty())
+        .map(|text| StreamEvent::Delta { text }))
 }
 
 impl From<SwitchyardUsage> for TokenUsage {
@@ -300,6 +468,25 @@ pub mod testing {
                 .expect("calls lock poisoned")
                 .push(request);
             Ok(self.response.clone())
+        }
+
+        async fn stream(&self, request: CompletionRequest) -> Result<RouterStream, RouterError> {
+            self.calls
+                .lock()
+                .expect("calls lock poisoned")
+                .push(request);
+            let events = vec![
+                Ok(StreamEvent::Metadata {
+                    selected_model: self.response.selected_model,
+                    upstream_model: self.response.upstream_model.clone(),
+                    route: self.response.selected_model.route_id().to_owned(),
+                }),
+                Ok(StreamEvent::Delta {
+                    text: self.response.content.clone(),
+                }),
+                Ok(StreamEvent::Done),
+            ];
+            Ok(Box::pin(futures_util::stream::iter(events)))
         }
     }
 }
@@ -380,5 +567,57 @@ mod adapter_tests {
             .expect_err("upstream rejection should fail");
 
         assert_eq!(error.to_string(), "the model provider rejected the request");
+    }
+
+    #[tokio::test]
+    async fn switchyard_adapter_maps_streaming_frames_and_router_header() {
+        let server = MockServer::start().await;
+        let body = concat!(
+            "data: {\"model\":\"gpt-5-mini\",\"choices\":[{\"delta\":{\"content\":\"Prone \"}}]}\n\n",
+            "data: {\"model\":\"gpt-5-mini\",\"choices\":[{\"delta\":{\"content\":\"limits movement.\"}}]}\n\n",
+            "data: {\"model\":\"gpt-5-mini\",\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\n",
+            "data: [DONE]\n\n"
+        );
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .and(body_partial_json(json!({
+                "model": "dungeon-router/mini",
+                "stream": true,
+                "stream_options": {"include_usage": true}
+            })))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .insert_header("x-model-router-selected-model", "gpt-5-mini")
+                    .set_body_string(body),
+            )
+            .mount(&server)
+            .await;
+
+        let router = SwitchyardRouter::new(server.uri()).expect("HTTP client should build");
+        let events = router
+            .stream(CompletionRequest {
+                prompt: "What does prone do?".into(),
+                model: ModelTier::Mini,
+                max_output_tokens: 300,
+            })
+            .await
+            .expect("stream should start")
+            .collect::<Vec<_>>()
+            .await;
+
+        assert!(matches!(
+            &events[0],
+            Ok(StreamEvent::Metadata { upstream_model, .. }) if upstream_model == "gpt-5-mini"
+        ));
+        assert!(matches!(&events[1], Ok(StreamEvent::Delta { text }) if text == "Prone "));
+        assert!(
+            matches!(&events[2], Ok(StreamEvent::Delta { text }) if text == "limits movement.")
+        );
+        assert!(matches!(
+            &events[3],
+            Ok(StreamEvent::Usage { usage }) if usage.total_tokens == 16
+        ));
+        assert!(matches!(&events[4], Ok(StreamEvent::Done)));
     }
 }

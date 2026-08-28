@@ -52,7 +52,31 @@ Content-Type: application/json
 }
 ```
 
-The endpoint currently exists to validate routing independently of retrieval and chat streaming. The user-facing chat flow will use this same abstraction in the next milestone.
+Run a streaming manual completion:
+
+```text
+POST /api/router/stream
+Accept: text/event-stream
+Content-Type: application/json
+
+{
+  "prompt": "What does the prone condition do?",
+  "model": "nano",
+  "max_output_tokens": 800
+}
+```
+
+The streaming endpoint returns named Server-Sent Events:
+
+- `metadata` identifies the requested tier, selected upstream model, and Switchyard route;
+- `delta` contains the next text fragment;
+- `usage` reports token counts when the upstream provider supplies them;
+- `done` marks normal completion;
+- `error` reports a normalized mid-stream failure without exposing the provider body.
+
+The React client reads these events using `fetch` so it can POST the question and cancel the request with an `AbortController`. Pressing Stop preserves the partial answer. When the browser drops the response body, Rust drops the upstream `reqwest` stream as well.
+
+Automatic model selection is still intentionally deferred. Until that milestone, the UI defaults to the cheapest tier (`gpt-5-nano`) and lets the DM explicitly select Mini or GPT-5.
 
 ## Failure behavior
 
@@ -69,6 +93,6 @@ The test suite includes:
 - handler tests using an in-memory `MockRouter`;
 - validation tests ensuring bad requests do not call the router;
 - HTTP adapter tests using a local mock server;
+- streaming adapter and SSE handler tests using deterministic local responses;
 - verification that the selected model route and token usage are mapped correctly;
 - verification that upstream error bodies are not exposed.
-

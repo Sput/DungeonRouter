@@ -2,13 +2,14 @@
 
 DungeonRouter is an experimental, open-source D&D 5e (2014) rules assistant. It is designed to search SRD 5.1 and campaign notes, cite its sources, and demonstrate cost-aware routing across `gpt-5-nano`, `gpt-5-mini`, and `gpt-5` through NVIDIA NeMo Switchyard.
 
-The repository currently contains the application foundation and manual model-routing layer:
+The repository currently contains the application foundation, manual model routing, and an end-to-end streaming chat path:
 
 - a Rust/Axum API;
 - SQLite migrations and startup initialization;
 - a React/TypeScript/Vite frontend;
 - a replaceable Rust `ModelRouter` abstraction;
 - Switchyard passthrough routes for nano, mini, and GPT-5;
+- streamed browser responses with stop-generation support and routing metadata;
 - shared local-development commands and environment configuration.
 
 ## Repository layout
@@ -62,6 +63,7 @@ See [Model routing](docs/model-routing.md) to configure and run Switchyard on `h
 
 ```sh
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 pnpm typecheck
 pnpm build:web
 ```

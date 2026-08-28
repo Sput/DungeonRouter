@@ -2,11 +2,14 @@ use axum::{
     Json, Router,
     extract::State,
     http::{HeaderValue, Method, StatusCode},
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
 };
+use futures_core::Stream;
+use futures_util::StreamExt;
 use routing::{
     CompletionRequest, CompletionResponse, ModelDescriptor, ModelTier, RouterError,
-    SharedModelRouter, model_catalog,
+    SharedModelRouter, StreamEvent, model_catalog,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -36,6 +39,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/health", get(health))
         .route("/api/models", get(models))
         .route("/api/router/complete", post(complete))
+        .route("/api/router/stream", post(stream))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -65,6 +69,45 @@ async fn complete(
     State(state): State<AppState>,
     Json(request): Json<ManualCompletionRequest>,
 ) -> Result<Json<CompletionResponse>, RouterApiError> {
+    let request = validate_request(request)?;
+    let response = state.router.complete(request).await?;
+    Ok(Json(response))
+}
+
+async fn stream(
+    State(state): State<AppState>,
+    Json(request): Json<ManualCompletionRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, RouterApiError> {
+    let stream = state.router.stream(validate_request(request)?).await?;
+    let events = stream.map(|result| {
+        let event = match result {
+            Ok(event) => stream_event(event),
+            Err(error) => Event::default()
+                .event("error")
+                .json_data(ApiErrorBody {
+                    error: error.to_string(),
+                })
+                .expect("error event should serialize"),
+        };
+        Ok(event)
+    });
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
+}
+
+fn stream_event(event: StreamEvent) -> Event {
+    let name = match event {
+        StreamEvent::Metadata { .. } => "metadata",
+        StreamEvent::Delta { .. } => "delta",
+        StreamEvent::Usage { .. } => "usage",
+        StreamEvent::Done => "done",
+    };
+    Event::default()
+        .event(name)
+        .json_data(event)
+        .expect("stream event should serialize")
+}
+
+fn validate_request(request: ManualCompletionRequest) -> Result<CompletionRequest, RouterApiError> {
     let prompt = request.prompt.trim();
     if prompt.is_empty() {
         return Err(RouterApiError::InvalidPrompt(
@@ -82,16 +125,11 @@ async fn complete(
             "max_output_tokens must be between 1 and 4,000".into(),
         ));
     }
-
-    let response = state
-        .router
-        .complete(CompletionRequest {
-            prompt: prompt.to_owned(),
-            model: request.model,
-            max_output_tokens,
-        })
-        .await?;
-    Ok(Json(response))
+    Ok(CompletionRequest {
+        prompt: prompt.to_owned(),
+        model: request.model,
+        max_output_tokens,
+    })
 }
 
 enum RouterApiError {
@@ -263,5 +301,41 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         assert!(router.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn streaming_completion_emits_metadata_delta_and_done_events() {
+        let router = mock_router();
+        let response = app(test_state(router.clone()).await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/router/stream")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"prompt":"Explain prone","model":"mini","max_output_tokens":500}"#,
+                    ))
+                    .expect("request should build"),
+            )
+            .await
+            .expect("stream request should succeed");
+
+        assert!(response.status().is_success());
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/event-stream"
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("stream should collect")
+            .to_bytes();
+        let text = String::from_utf8(body.to_vec()).expect("body should be UTF-8");
+        assert!(text.contains("event: metadata"));
+        assert!(text.contains("event: delta"));
+        assert!(text.contains("Mock ruling"));
+        assert!(text.contains("event: done"));
+        assert_eq!(router.calls().len(), 1);
     }
 }
