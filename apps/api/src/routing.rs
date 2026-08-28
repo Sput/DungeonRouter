@@ -561,7 +561,7 @@ pub mod testing {
                 .lock()
                 .expect("calls lock poisoned")
                 .push(request);
-            let events = vec![
+            let mut events = vec![
                 Ok(StreamEvent::Metadata {
                     requested_model,
                     selected_model: self.response.selected_model.clone(),
@@ -577,8 +577,11 @@ pub mod testing {
                 Ok(StreamEvent::Delta {
                     text: self.response.content.clone(),
                 }),
-                Ok(StreamEvent::Done),
             ];
+            if let Some(usage) = self.response.usage.clone() {
+                events.push(Ok(StreamEvent::Usage { usage }));
+            }
+            events.push(Ok(StreamEvent::Done));
             Ok(Box::pin(futures_util::stream::iter(events)))
         }
     }

@@ -80,7 +80,7 @@ export function App() {
 
   async function ask(event?: FormEvent) {
     event?.preventDefault();
-    if (!question.trim() || isRunning) return;
+    if (!question.trim() || isRunning || usageSummary?.budget_status === "stopped") return;
     controller.current?.abort();
     const abortController = new AbortController();
     controller.current = abortController;
@@ -187,7 +187,8 @@ export function App() {
       <textarea id="question" name="question" placeholder="What does the prone condition do?" rows={5} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={isRunning}/>
       <div className="route-picker"><div><span className="field-label">Attunement</span><p>{model === "auto" ? "Switchyard selects the cheapest capable model" : chosenModel?.purpose}</p></div>
         <select aria-label="Model selection" value={model} onChange={(event) => setModel(event.target.value as RoutingChoice)} disabled={isRunning}><option value="auto">Auto · cost-aware</option>{models.map((item) => <option key={item.tier} value={item.tier}>{item.label} · {item.model_id}</option>)}</select></div>
-      <div className="actions"><span className="hint">Enter to ask · Shift+Enter for a new line</span>{isRunning ? <button type="button" className="stop" onClick={() => controller.current?.abort()}>Stop</button> : <button type="submit" disabled={!question.trim() || health?.status !== "ok"}>Ask</button>}</div>
+      <div className="actions"><span className="hint">{runState === "connecting" ? "Retrieving sources and selecting a route…" : runState === "streaming" ? "Streaming the selected model’s answer…" : "Enter to ask · Shift+Enter for a new line"}</span>{isRunning ? <button type="button" className="stop" onClick={() => controller.current?.abort()}>Stop</button> : <button type="submit" disabled={!question.trim() || health?.status !== "ok" || usageSummary?.budget_status === "stopped"}>Ask</button>}</div>
+      {usageSummary?.budget_status === "stopped" && <p className="budget-blocked" role="alert">The monthly model-cost limit has been reached. Increase the local limit and restart the API to make another model call.</p>}
     </form>
     <section className="result" aria-labelledby="answer-heading" aria-busy={isRunning}><div className="result-heading"><h2 id="answer-heading">Ruling</h2><span className={`run-state run-state--${runState}`}>{runState}</span></div>
       <div className={answer ? "answer" : "answer answer--empty"} aria-live="polite">{answer ? renderAnswer(answer, sources, citationValidation, openSource) : (isRunning ? "Consulting the archive…" : "The archive awaits your question.")}{runState === "streaming" && <span className="cursor" aria-hidden="true"/>}</div>

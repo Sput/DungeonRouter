@@ -554,6 +554,22 @@ mod tests {
         }))
     }
 
+    fn metered_mock_router() -> Arc<MockRouter> {
+        Arc::new(MockRouter::new(CompletionResponse {
+            content: "Prone creatures crawl [S1].".into(),
+            requested_model: ModelTier::Nano,
+            selected_model: "gpt-5-nano".into(),
+            routing_mode: RoutingMode::Auto,
+            routing_reason: Some("Direct lookup".into()),
+            classifier_confidence: Some(0.95),
+            usage: Some(routing::TokenUsage {
+                input_tokens: 1_000,
+                output_tokens: 100,
+                total_tokens: 1_100,
+            }),
+        }))
+    }
+
     #[tokio::test]
     async fn health_reports_connected_database() {
         let response = app(test_state(mock_router()).await)
@@ -726,6 +742,56 @@ mod tests {
         );
         assert!(calls[0].prompt.contains("\"id\":\"S1\""));
         assert!(calls[0].prompt.contains("only movement option"));
+    }
+
+    #[tokio::test]
+    async fn grounded_chat_records_usage_for_the_dashboard() {
+        let state = searchable_test_state(metered_mock_router()).await;
+        let response = app(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"prompt":"What does prone do?","model":"nano","routing_mode":"auto"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        response.into_body().collect().await.unwrap();
+
+        let summary = usage::summary(&state.db, &state.costs).await.unwrap();
+        assert_eq!(summary.total_questions, 1);
+        assert_eq!(summary.automatic_requests, 1);
+        assert_eq!(summary.requests_by_model[0].model, "gpt-5-nano");
+        assert!(summary.actual_cost_usd > 0.0);
+    }
+
+    #[tokio::test]
+    async fn hard_limit_blocks_chat_before_the_router_is_called() {
+        let router = mock_router();
+        let mut state = searchable_test_state(router.clone()).await;
+        state.costs.monthly_hard_limit_usd = 0.01;
+        sqlx::query("INSERT INTO model_runs (routing_mode, selected_model, estimated_cost_usd, always_gpt5_cost_usd, latency_ms, status, pricing_version) VALUES ('manual', 'gpt-5', 0.01, 0.01, 1, 'completed', 'test')")
+            .execute(&state.db).await.unwrap();
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"prompt":"What does prone do?","model":"nano"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYMENT_REQUIRED);
+        assert!(router.calls().is_empty());
     }
 
     #[tokio::test]

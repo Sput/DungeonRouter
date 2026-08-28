@@ -31,6 +31,8 @@ docs/        Architecture and project planning
 - Rust and Cargo
 - Node.js 20 or newer
 - pnpm 9 or newer
+- an OpenAI API key for live answers
+- `switchyard-server` for live routing
 
 An OpenAI API key is not required for unit tests or frontend development. It is required only when exercising live model calls through Switchyard.
 
@@ -48,6 +50,22 @@ Install frontend dependencies:
 pnpm install
 ```
 
+Install Switchyard using its published Rust binary:
+
+```sh
+cargo install --locked switchyard-server
+switchyard-server --config config/switchyard.toml --dry-run
+```
+
+Add your OpenAI key to `.env`, then load it into the terminal that starts Switchyard:
+
+```sh
+set -a
+source .env
+set +a
+switchyard-server --config config/switchyard.toml --host 127.0.0.1 --port 4100
+```
+
 Start the API:
 
 ```sh
@@ -61,6 +79,13 @@ pnpm dev:web
 ```
 
 The web client runs at `http://localhost:5173` and proxies `/api` requests to the API at `http://localhost:4000`.
+
+Verify both backend processes before opening the page:
+
+```sh
+curl http://127.0.0.1:4100/health
+curl http://127.0.0.1:4000/api/health
+```
 
 See [Model routing](docs/model-routing.md) to configure and run Switchyard on `http://127.0.0.1:4100`.
 
@@ -78,12 +103,16 @@ pnpm build:web
 ## Documentation
 
 - [Project plan](docs/project-plan.md)
+- [Progress tracker](docs/progress.md)
+- [Architecture](docs/architecture.md)
 - [Model routing](docs/model-routing.md)
 - [SRD data](docs/srd-data.md)
 - [Grounded chat](docs/grounded-chat.md)
 - [Campaign notes](docs/campaign-notes.md)
 - [Cost controls](docs/cost-controls.md)
 - [Evaluation set](evals/README.md)
+- [Known limitations](docs/limitations.md)
+- [Demo script](docs/demo-script.md)
 - [Contributing](CONTRIBUTING.md)
 - [SRD attribution](NOTICE.md)
 
