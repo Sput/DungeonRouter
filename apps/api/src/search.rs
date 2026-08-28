@@ -108,7 +108,7 @@ fn fts_expression(query: &str) -> Option<String> {
             .into_iter()
             .map(|term| format!("\"{term}\"*"))
             .collect::<Vec<_>>()
-            .join(" AND ")
+            .join(" OR ")
     })
 }
 

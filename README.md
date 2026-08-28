@@ -11,6 +11,7 @@ The repository currently contains the application foundation, manual model routi
 - Switchyard passthrough routes for nano, mini, and GPT-5;
 - streamed browser responses with stop-generation support and routing metadata;
 - a bundled, CC-licensed SRD 5.1 snapshot with SQLite FTS5 retrieval;
+- grounded streamed answers with validated, inspectable SRD citations;
 - shared local-development commands and environment configuration.
 
 ## Repository layout
@@ -76,6 +77,7 @@ pnpm build:web
 - [Project plan](docs/project-plan.md)
 - [Model routing](docs/model-routing.md)
 - [SRD data](docs/srd-data.md)
+- [Grounded chat](docs/grounded-chat.md)
 - [Contributing](CONTRIBUTING.md)
 - [SRD attribution](NOTICE.md)
 

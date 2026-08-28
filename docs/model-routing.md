@@ -78,6 +78,8 @@ The React client reads these events using `fetch` so it can POST the question an
 
 Automatic model selection is still intentionally deferred. Until that milestone, the UI defaults to the cheapest tier (`gpt-5-nano`) and lets the DM explicitly select Mini or GPT-5.
 
+The user-facing rules flow now uses `POST /api/chat`, which performs local SRD retrieval before calling this streaming router. See [Grounded chat](grounded-chat.md). The lower-level `/api/router/*` endpoints remain available for adapter diagnostics.
+
 ## Failure behavior
 
 - Empty, oversized, or invalid requests receive HTTP 400.

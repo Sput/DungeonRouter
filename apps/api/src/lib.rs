@@ -19,6 +19,7 @@ use tower_http::{
 };
 use tracing::Level;
 
+pub mod chat;
 pub mod routing;
 pub mod search;
 pub mod srd;
@@ -44,6 +45,7 @@ pub fn app(state: AppState) -> Router {
         .route("/api/sources/{chunk_id}", get(source_passage))
         .route("/api/router/complete", post(complete))
         .route("/api/router/stream", post(stream))
+        .route("/api/chat", post(chat))
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -168,6 +170,72 @@ async fn stream(
     Ok(Sse::new(events).keep_alive(KeepAlive::default()))
 }
 
+type ApiEventStream =
+    std::pin::Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>>;
+
+async fn chat(
+    State(state): State<AppState>,
+    Json(request): Json<ManualCompletionRequest>,
+) -> Result<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>, RouterApiError> {
+    let request = validate_request(request)?;
+    let grounded = crate::chat::prepare(
+        &state.db,
+        &request.prompt,
+        request.model,
+        request.max_output_tokens,
+    )
+    .await
+    .map_err(SearchApiError::from)
+    .map_err(RouterApiError::Search)?;
+
+    let events: ApiEventStream = if let Some(grounded) = grounded {
+        let sources = grounded.sources;
+        let source_count = sources.len();
+        let mut upstream = state.router.stream(grounded.completion).await?;
+        Box::pin(async_stream::stream! {
+            yield Ok(sse_json("sources", &sources));
+            let mut answer = String::new();
+            while let Some(result) = upstream.next().await {
+                match result {
+                    Ok(StreamEvent::Delta { text }) => {
+                        answer.push_str(&text);
+                        yield Ok(stream_event(StreamEvent::Delta { text }));
+                    }
+                    Ok(StreamEvent::Done) => {}
+                    Ok(event) => yield Ok(stream_event(event)),
+                    Err(error) => {
+                        yield Ok(sse_json("error", &ApiErrorBody { error: error.to_string() }));
+                        return;
+                    }
+                }
+            }
+            let validation = crate::chat::validate_citations(&answer, source_count);
+            yield Ok(sse_json("citation_validation", &validation));
+            yield Ok(stream_event(StreamEvent::Done));
+        })
+    } else {
+        Box::pin(async_stream::stream! {
+            yield Ok(sse_json("sources", &Vec::<crate::chat::GroundedSource>::new()));
+            yield Ok(stream_event(StreamEvent::Delta {
+                text: "Not found in the supplied SRD passages. Try using specific rules terms or search the SRD directly.".into(),
+            }));
+            yield Ok(sse_json("citation_validation", &crate::chat::CitationValidation {
+                cited: Vec::new(), unsupported: Vec::new(), missing_required: false,
+            }));
+            yield Ok(stream_event(StreamEvent::Done));
+        })
+    };
+
+    Ok(Sse::new(events).keep_alive(KeepAlive::default()))
+}
+
+fn sse_json<T: Serialize>(name: &'static str, value: &T) -> Event {
+    Event::default()
+        .event(name)
+        .json_data(value)
+        .expect("API event should serialize")
+}
+
 fn stream_event(event: StreamEvent) -> Event {
     let name = match event {
         StreamEvent::Metadata { .. } => "metadata",
@@ -200,6 +268,7 @@ fn validate_request(request: ManualCompletionRequest) -> Result<CompletionReques
         ));
     }
     Ok(CompletionRequest {
+        instructions: None,
         prompt: prompt.to_owned(),
         model: request.model,
         max_output_tokens,
@@ -209,6 +278,7 @@ fn validate_request(request: ManualCompletionRequest) -> Result<CompletionReques
 enum RouterApiError {
     InvalidPrompt(String),
     Router(RouterError),
+    Search(SearchApiError),
 }
 
 impl From<RouterError> for RouterApiError {
@@ -224,6 +294,7 @@ impl axum::response::IntoResponse for RouterApiError {
                 (StatusCode::BAD_REQUEST, Json(ApiErrorBody { error })).into_response()
             }
             Self::Router(error) => error.into_response(),
+            Self::Search(error) => error.into_response(),
         }
     }
 }
@@ -443,6 +514,79 @@ mod tests {
         assert!(text.contains("Mock ruling"));
         assert!(text.contains("event: done"));
         assert_eq!(router.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn grounded_chat_retrieves_sources_before_calling_router() {
+        let router = mock_router();
+        let response = app(searchable_test_state(router.clone()).await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"prompt":"What does prone do?","model":"nano"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("event: sources"));
+        assert!(text.contains("\"citation_id\":\"S1\""));
+        assert!(text.contains("event: citation_validation"));
+
+        let calls = router.calls();
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0]
+                .instructions
+                .as_deref()
+                .unwrap()
+                .contains("Answer only from")
+        );
+        assert!(calls[0].prompt.contains("<source id=\"S1\""));
+        assert!(calls[0].prompt.contains("only movement option"));
+    }
+
+    #[tokio::test]
+    async fn grounded_chat_skips_model_when_no_source_matches() {
+        let router = mock_router();
+        let response = app(searchable_test_state(router.clone()).await)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(r#"{"prompt":"zyxwvu","model":"gpt-5"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let text = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("Not found in the supplied SRD passages"));
+        assert!(router.calls().is_empty());
     }
 
     #[tokio::test]

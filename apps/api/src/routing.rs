@@ -93,6 +93,7 @@ pub fn model_catalog() -> Vec<ModelDescriptor> {
 
 #[derive(Debug, Clone)]
 pub struct CompletionRequest {
+    pub instructions: Option<String>,
     pub prompt: String,
     pub model: ModelTier,
     pub max_output_tokens: u32,
@@ -198,10 +199,7 @@ impl ModelRouter for SwitchyardRouter {
         let endpoint = format!("{}/v1/chat/completions", self.base_url);
         let payload = SwitchyardRequest {
             model: request.model.route_id(),
-            messages: vec![ChatMessage {
-                role: "user",
-                content: &request.prompt,
-            }],
+            messages: request_messages(&request),
             stream: false,
             stream_options: None,
             max_completion_tokens: request.max_output_tokens,
@@ -244,10 +242,7 @@ impl ModelRouter for SwitchyardRouter {
         let endpoint = format!("{}/v1/chat/completions", self.base_url);
         let payload = SwitchyardRequest {
             model: request.model.route_id(),
-            messages: vec![ChatMessage {
-                role: "user",
-                content: &request.prompt,
-            }],
+            messages: request_messages(&request),
             stream: true,
             stream_options: Some(StreamOptions {
                 include_usage: true,
@@ -331,6 +326,21 @@ struct StreamOptions {
 struct ChatMessage<'a> {
     role: &'static str,
     content: &'a str,
+}
+
+fn request_messages(request: &CompletionRequest) -> Vec<ChatMessage<'_>> {
+    let mut messages = Vec::with_capacity(2);
+    if let Some(instructions) = request.instructions.as_deref() {
+        messages.push(ChatMessage {
+            role: "developer",
+            content: instructions,
+        });
+    }
+    messages.push(ChatMessage {
+        role: "user",
+        content: &request.prompt,
+    });
+    messages
 }
 
 #[derive(Deserialize)]
@@ -528,6 +538,7 @@ mod adapter_tests {
         let router = SwitchyardRouter::new(server.uri()).expect("HTTP client should build");
         let response = router
             .complete(CompletionRequest {
+                instructions: None,
                 prompt: "Resolve this interaction".into(),
                 model: ModelTier::Gpt5,
                 max_output_tokens: 700,
@@ -559,6 +570,7 @@ mod adapter_tests {
         let router = SwitchyardRouter::new(server.uri()).expect("HTTP client should build");
         let error = router
             .complete(CompletionRequest {
+                instructions: None,
                 prompt: "question".into(),
                 model: ModelTier::Nano,
                 max_output_tokens: 100,
@@ -597,6 +609,7 @@ mod adapter_tests {
         let router = SwitchyardRouter::new(server.uri()).expect("HTTP client should build");
         let events = router
             .stream(CompletionRequest {
+                instructions: None,
                 prompt: "What does prone do?".into(),
                 model: ModelTier::Mini,
                 max_output_tokens: 300,

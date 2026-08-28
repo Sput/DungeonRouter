@@ -12,7 +12,7 @@ h1 { margin: .5rem 0 0; font-family: Georgia, serif; font-size: clamp(3rem, 8vw,
 .dot { width: .6rem; height: .6rem; border-radius: 50%; background: #777; }
 .dot--ok { background: #79c980; box-shadow: 0 0 0 4px rgba(121,201,128,.1); }
 .muted { color: #817d77; }.muted::before { content: "·"; margin-right: .55rem; }
-.ask, .result { margin-top: 2rem; border: 1px solid #393938; border-radius: .6rem; background: linear-gradient(180deg,#202020,#181818); box-shadow: inset 0 1px rgba(255,255,255,.04),0 1.5rem 5rem rgba(0,0,0,.2); }
+.ask, .result, .sources { margin-top: 2rem; border: 1px solid #393938; border-radius: .6rem; background: linear-gradient(180deg,#202020,#181818); box-shadow: inset 0 1px rgba(255,255,255,.04),0 1.5rem 5rem rgba(0,0,0,.2); }
 .ask { padding: clamp(1.1rem,3vw,1.6rem); }.ask>label { display:block; margin-bottom:.8rem; font-family:Georgia,serif; font-size:1.3rem; font-weight:700; }
 .ask textarea { width:100%; resize:vertical; padding:1rem .2rem; color:#eee8df; border:0; border-bottom:1px solid #55534f; border-radius:0; outline:0; background:transparent; font-size:1.05rem; line-height:1.55; transition:150ms; }
 .ask textarea:focus { border-bottom-color:#f2bd2e; box-shadow:0 6px 12px -10px #f2bd2e; }.ask textarea:disabled { opacity:.75; }
@@ -28,6 +28,12 @@ button:hover { box-shadow:0 0 16px rgba(242,189,46,.18); }button:disabled { curs
 .message { margin:0; padding:.75rem 1.4rem; color:#c5b078; border-top:1px solid #393938; font-size:.82rem; }.message--error { color:#f3a6a2; }
 .metadata { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); margin:0; border-top:1px solid #393938; }.metadata div { min-width:0; padding:1rem 1.4rem; border-right:1px solid #393938; }.metadata div:last-child { border-right:0; }
 .metadata dt { color:#817d77; }.metadata dd { overflow:hidden; margin:.35rem 0 0; color:#d6d0c7; font-family:ui-monospace,monospace; font-size:.76rem; text-overflow:ellipsis; white-space:nowrap; }
+.citation { display:inline; min-width:0; min-height:0; margin:0 .08rem; padding:.08rem .25rem; color:#f2bd2e; border:0; border-radius:.2rem; background:rgba(242,189,46,.1); font-family:ui-monospace,monospace; font-size:.78em; letter-spacing:0; text-transform:none; vertical-align:.08rem; }
+.citation:hover { box-shadow:none; background:rgba(242,189,46,.2); }
+.sources { padding:1.4rem; }.sources-heading { display:flex; justify-content:space-between; align-items:center; margin-bottom:1rem; }.sources-heading h2 { margin:0; }.sources-heading span { color:#817d77; font-size:.75rem; }
+.source-list { display:grid; gap:.65rem; }.source-card { display:flex; align-items:start; gap:.8rem; width:100%; min-height:0; padding:.9rem; color:#d6d0c7; border:1px solid #393938; background:#181818; text-align:left; text-transform:none; letter-spacing:0; }
+.source-card:hover { border-color:#686158; box-shadow:none; }.source-card strong,.source-card small { display:block; }.source-card strong { font-family:Georgia,serif; }.source-card small { display:-webkit-box; overflow:hidden; margin-top:.3rem; color:#918c84; font-weight:400; line-height:1.45; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+.source-id { flex:none; color:#f2bd2e; font-family:ui-monospace,monospace; font-size:.75rem; font-weight:800; }.source-detail { margin-top:1rem; padding:1rem; border:1px solid #5a5146; background:#141414; }.source-detail>div { display:flex; align-items:center; gap:.7rem; }.source-detail pre { overflow:auto; max-height:22rem; margin:1rem 0; color:#d8d1c8; font:inherit; font-size:.9rem; line-height:1.55; white-space:pre-wrap; }.source-detail footer { color:#77736d; font-family:ui-monospace,monospace; font-size:.7rem; }.close-source { min-width:2rem; min-height:2rem; margin-left:auto; padding:0; color:#aaa59d; border:0; background:transparent; font-size:1.35rem; letter-spacing:0; text-transform:none; }.close-source:hover { box-shadow:none; color:#fff; }
 @keyframes blink { 50% { opacity:0; } }
 @media(max-width:650px) { .hero{align-items:start;flex-direction:column}.route-picker{align-items:stretch;flex-direction:column}select{max-width:none;width:100%}.hint{display:none}.metadata{grid-template-columns:1fr 1fr}.metadata div:nth-child(2){border-right:0}.metadata div:nth-child(-n+2){border-bottom:1px solid #393938} }
 @media(prefers-reduced-motion:reduce) { .cursor{animation:none} }
