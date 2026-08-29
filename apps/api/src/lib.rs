@@ -411,10 +411,10 @@ fn validate_request(request: ManualCompletionRequest) -> Result<CompletionReques
             "prompt must not exceed 12,000 characters".into(),
         ));
     }
-    let max_output_tokens = request.max_output_tokens.unwrap_or(4_000);
-    if !(1..=4_000).contains(&max_output_tokens) {
+    let max_output_tokens = request.max_output_tokens.unwrap_or(8_000);
+    if !(1..=8_000).contains(&max_output_tokens) {
         return Err(RouterApiError::InvalidPrompt(
-            "max_output_tokens must be between 1 and 4,000".into(),
+            "max_output_tokens must be between 1 and 8,000".into(),
         ));
     }
     Ok(CompletionRequest {

@@ -19,7 +19,7 @@ Auto is the browser default. Switchyard's custom multi-target `llm_classifier` r
 
 The classifier returns a strict JSON-schema verdict containing target, task type, reason, and confidence. Switchyard validates the target through a deterministic JSON-pointer policy. Invalid output or classifier failure falls back to Mini; it never silently escalates to GPT-5. Choosing Nano, Mini, or GPT-5 manually uses the passthrough route and does not incur a classifier call.
 
-The classifier has a 2,000-token output allowance and answer requests use a 4,000-token allowance. OpenAI counts reasoning and visible text within the same output limit; these ceilings provide room for reasoning without requiring the model to use every available token. Empty model streams are treated as failures rather than successful blank answers. A zero-confidence Switchyard fall-through is labeled as a Mini safety fallback instead of classifier confidence.
+The classifier has a 2,000-token output allowance and answer requests use an 8,000-token allowance. OpenAI counts reasoning and visible text within the same output limit; these ceilings provide room for reasoning without requiring the model to use every available token. The GPT-5 answer target uses low reasoning effort so complex rulings retain room for visible output. Empty model streams are treated as failures rather than successful blank answers. A zero-confidence Switchyard fall-through is labeled as a Mini safety fallback instead of classifier confidence.
 
 ## Start Switchyard
 

@@ -26,6 +26,9 @@ llm_client = "openai"
 [targets.gpt5]
 id = "gpt-5"
 llm_client = "openai"
+# Complex rulings benefit from reasoning, but medium effort can consume the
+# entire answer allowance before GPT-5 emits visible text.
+extra_body = { reasoning = { effort = "low" } }
 
 [targets.classifier_nano]
 id = "gpt-5-nano"
