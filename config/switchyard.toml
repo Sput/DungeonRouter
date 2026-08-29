@@ -30,6 +30,9 @@ llm_client = "openai"
 [targets.classifier_nano]
 id = "gpt-5-nano"
 llm_client = "openai_classifier"
+# Classification only needs a tiny JSON verdict. Minimal reasoning prevents the
+# model from consuming the entire output allowance before emitting that JSON.
+extra_body = { reasoning_effort = "minimal" }
 
 [routes.nano]
 id = "dungeon-router/nano"
