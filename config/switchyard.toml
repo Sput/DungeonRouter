@@ -6,6 +6,15 @@ base_url = "https://api.openai.com/v1"
 api_key_env = "OPENAI_API_KEY"
 max_retries = 1
 
+# Switchyard 0.2.0 does not flatten its Chat-style JSON Schema wrapper when
+# encoding structured output for the Responses API. Keep answer generation on
+# Responses, but use Chat Completions for the classifier until that is fixed.
+[llm_clients.openai_classifier]
+format = "openai_chat"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_retries = 1
+
 [targets.nano]
 id = "gpt-5-nano"
 llm_client = "openai"
@@ -17,6 +26,10 @@ llm_client = "openai"
 [targets.gpt5]
 id = "gpt-5"
 llm_client = "openai"
+
+[targets.classifier_nano]
+id = "gpt-5-nano"
+llm_client = "openai_classifier"
 
 [routes.nano]
 id = "dungeon-router/nano"
@@ -37,7 +50,7 @@ target = "gpt5"
 id = "dungeon-router/auto"
 type = "llm_classifier"
 mode = "custom"
-classifier_target = "nano"
+classifier_target = "classifier_nano"
 targets = ["nano", "mini", "gpt5"]
 default_target = "mini"
 max_output_tokens = 2000
