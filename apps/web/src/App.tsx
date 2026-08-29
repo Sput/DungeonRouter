@@ -15,7 +15,7 @@ type GroundedSource = {
   excerpt: string; source_locator: string; source_revision: string | null; license: string | null;
 };
 type SourceChunk = GroundedSource & { content: string; heading: string };
-type CitationValidation = { cited: string[]; unsupported: string[]; missing_required: boolean };
+type CitationValidation = { cited: string[]; unsupported: string[]; missing_required: boolean; uses_model_knowledge: boolean };
 type CampaignNote = { id: number; title: string; filename: string; chunk_count: number; created_at: string };
 type UsageSummary = { total_questions: number; actual_cost_usd: number; always_gpt5_cost_usd: number; estimated_savings_usd: number; estimated_savings_percent: number; automatic_requests: number; manual_requests: number; requests_by_model: { model: string; requests: number; average_latency_ms: number }[]; warning_threshold_usd: number; hard_limit_usd: number; budget_status: "ok" | "warning" | "stopped"; pricing_version: string };
 
@@ -194,6 +194,7 @@ export function App() {
       <div className={answer ? "answer" : "answer answer--empty"} aria-live="polite">{answer ? renderAnswer(answer, sources, citationValidation, openSource) : (isRunning ? "Consulting the archive…" : "The archive awaits your question.")}{runState === "streaming" && <span className="cursor" aria-hidden="true"/>}</div>
       {citationValidation?.unsupported.length ? <p className="message message--error">Unsupported citation markers were left unlinked: {citationValidation.unsupported.join(", ")}</p> : null}
       {citationValidation?.missing_required ? <p className="message message--error">This answer did not cite its retrieved evidence. Treat it as unverified.</p> : null}
+      {citationValidation?.uses_model_knowledge ? <p className="message">Some guidance comes from the selected model’s knowledge rather than the retrieved SRD or campaign notes. Treat that portion as unverified.</p> : null}
       {message && <p className={runState === "error" ? "message message--error" : "message"}>{message}</p>}
       <dl className="metadata"><div><dt>Model</dt><dd>{selectedModel ?? "—"}</dd></div><div><dt>Route</dt><dd>{route ?? "—"}</dd></div><div><dt>Tokens</dt><dd>{tokens ?? "—"}</dd></div><div><dt>Time</dt><dd>{elapsedMs === null ? "—" : `${(elapsedMs / 1000).toFixed(1)}s`}</dd></div></dl>
       {routingReason && <p className="routing-reason"><strong>Why this model:</strong> {routingReason}{classifierConfidence !== null ? ` · ${Math.round(classifierConfidence * 100)}% confidence` : ""}</p>}

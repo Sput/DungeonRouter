@@ -24,6 +24,6 @@ Target length: five to seven minutes.
 ## Recovery notes
 
 - If Auto routing is surprising, explain that the routing receipt makes the decision inspectable and use a manual tier for the next request.
-- If retrieval finds no evidence, use the direct SRD wording or demonstrate the intentional no-model-call response.
+- If retrieval finds no evidence, show the model-knowledge disclosure and explain that those claims are useful guidance rather than source-verified rules.
 - If Switchyard is unavailable, show SRD search, note management, the evaluation dataset, and automated test results without making a paid call.
 - Never paste or display the API key during the demo.

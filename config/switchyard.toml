@@ -57,8 +57,8 @@ max_output_tokens = 2000
 prompt = """
 Route a grounded D&D 5e SRD question to the cheapest model likely to answer it correctly.
 
-Choose nano for a direct definition, one-passage lookup, extraction, or short factual answer.
-Choose mini when the answer combines multiple rules, explains an interaction, or requires ordinary adjudication.
+Choose nano only for a direct definition, one-passage lookup, extraction, or short factual answer that the retrieved passages support.
+Choose mini when the answer combines multiple rules, explains an interaction, requires ordinary adjudication, makes a tactical recommendation, or must supplement incomplete retrieval with reliable model knowledge.
 Choose gpt5 only for materially ambiguous timing, conflicting rules, long chains of interactions, or a request for multiple defensible rulings.
 
 Cost is the highest priority after correctness. Do not choose a larger model merely to improve prose. Return exactly one JSON object matching the response schema supplied with the request.

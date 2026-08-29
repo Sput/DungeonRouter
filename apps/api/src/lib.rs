@@ -328,7 +328,7 @@ async fn chat(
     .map_err(SearchApiError::from)
     .map_err(RouterApiError::Search)?;
 
-    let events: ApiEventStream = if let Some(grounded) = grounded {
+    let events: ApiEventStream = {
         let sources = grounded.sources;
         let source_count = sources.len();
         let mut upstream = state.router.stream(grounded.completion).await?;
@@ -372,17 +372,6 @@ async fn chat(
             let validation = crate::chat::validate_citations(&answer, source_count);
             yield Ok(sse_json("citation_validation", &validation));
             let _ = usage::record(&usage_db, &cost_config, usage::RunRecord { routing_mode, selected_model: &selected_model, selection_reason: routing_reason.as_deref(), classifier_confidence, usage: token_usage.as_ref(), latency_ms: started_at.elapsed().as_millis() as u64, status: "completed" }).await;
-            yield Ok(stream_event(StreamEvent::Done));
-        })
-    } else {
-        Box::pin(async_stream::stream! {
-            yield Ok(sse_json("sources", &Vec::<crate::chat::GroundedSource>::new()));
-            yield Ok(stream_event(StreamEvent::Delta {
-                text: "Not found in the supplied sources. Try using specific rules or campaign terms, or search the archive directly.".into(),
-            }));
-            yield Ok(sse_json("citation_validation", &crate::chat::CitationValidation {
-                cited: Vec::new(), unsupported: Vec::new(), missing_required: false,
-            }));
             yield Ok(stream_event(StreamEvent::Done));
         })
     };
@@ -755,7 +744,7 @@ mod tests {
                 .instructions
                 .as_deref()
                 .unwrap()
-                .contains("Answer only from")
+                .contains("Prefer the source passages")
         );
         assert!(calls[0].prompt.contains("\"id\":\"S1\""));
         assert!(calls[0].prompt.contains("only movement option"));
@@ -843,7 +832,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grounded_chat_skips_model_when_no_source_matches() {
+    async fn grounded_chat_uses_disclosed_model_knowledge_when_no_source_matches() {
         let router = mock_router();
         let response = app(searchable_test_state(router.clone()).await)
             .oneshot(
@@ -866,8 +855,9 @@ mod tests {
                 .to_vec(),
         )
         .unwrap();
-        assert!(text.contains("Not found in the supplied sources"));
-        assert!(router.calls().is_empty());
+        assert!(text.contains("Mock ruling"));
+        assert_eq!(router.calls().len(), 1);
+        assert!(router.calls()[0].prompt.contains("Question: zyxwvu"));
     }
 
     #[tokio::test]
