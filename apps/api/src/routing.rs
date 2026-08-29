@@ -236,7 +236,6 @@ impl ModelRouter for SwitchyardRouter {
 
         let selected_model = selected_model_from_headers(response.headers());
         let routing_reason = routing_reason_from_headers(response.headers());
-        let classifier_confidence = routing_reason.as_deref().and_then(parse_confidence);
         let response: SwitchyardResponse = response
             .json()
             .await
@@ -250,10 +249,8 @@ impl ModelRouter for SwitchyardRouter {
             .ok_or(RouterError::InvalidResponse)?;
 
         let selected_model = selected_model.unwrap_or(response.model);
-        let routing_reason = Some(
-            routing_reason
-                .unwrap_or_else(|| fallback_routing_reason(request.routing_mode, &selected_model)),
-        );
+        let (routing_reason, classifier_confidence) =
+            routing_receipt(request.routing_mode, &selected_model, routing_reason);
         Ok(CompletionResponse {
             content,
             requested_model: request.model,
@@ -294,16 +291,14 @@ impl ModelRouter for SwitchyardRouter {
         let selected_model = selected_model_from_headers(response.headers())
             .unwrap_or_else(|| requested_model.model_id().to_owned());
         let routing_reason = routing_reason_from_headers(response.headers());
-        let classifier_confidence = routing_reason.as_deref().and_then(parse_confidence);
         let routing_mode = request.routing_mode;
         let route = request.route_id().to_owned();
-        let routing_reason = Some(
-            routing_reason
-                .unwrap_or_else(|| fallback_routing_reason(routing_mode, &selected_model)),
-        );
+        let (routing_reason, classifier_confidence) =
+            routing_receipt(routing_mode, &selected_model, routing_reason);
         let mut bytes = response.bytes_stream();
 
         let stream = async_stream::try_stream! {
+            let mut produced_text = false;
             yield StreamEvent::Metadata {
                 requested_model,
                 selected_model,
@@ -324,6 +319,9 @@ impl ModelRouter for SwitchyardRouter {
                         .to_owned();
                     buffer.drain(..boundary + delimiter_length);
                     if let Some(event) = parse_switchyard_frame(&frame)? {
+                        if matches!(&event, StreamEvent::Delta { text } if !text.trim().is_empty()) {
+                            produced_text = true;
+                        }
                         yield event;
                     }
                 }
@@ -335,7 +333,13 @@ impl ModelRouter for SwitchyardRouter {
                 .transpose()?
                 .flatten();
             if let Some(event) = trailing_event {
+                if matches!(&event, StreamEvent::Delta { text } if !text.trim().is_empty()) {
+                    produced_text = true;
+                }
                 yield event;
+            }
+            if !produced_text {
+                Err(RouterError::InvalidResponse)?;
             }
             yield StreamEvent::Done;
         };
@@ -457,6 +461,31 @@ fn fallback_routing_reason(mode: RoutingMode, selected_model: &str) -> String {
         }
         RoutingMode::Manual => format!("The DM manually selected {selected_model}"),
     }
+}
+
+fn routing_receipt(
+    mode: RoutingMode,
+    selected_model: &str,
+    upstream_reason: Option<String>,
+) -> (Option<String>, Option<f64>) {
+    let confidence = upstream_reason.as_deref().and_then(parse_confidence);
+    if mode == RoutingMode::Auto
+        && confidence == Some(0.0)
+        && upstream_reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("fall-through selected"))
+    {
+        return (
+            Some(format!(
+                "Classifier unavailable; Switchyard used the {selected_model} safety fallback"
+            )),
+            None,
+        );
+    }
+    (
+        Some(upstream_reason.unwrap_or_else(|| fallback_routing_reason(mode, selected_model))),
+        confidence,
+    )
 }
 
 impl CompletionRequest {
@@ -611,6 +640,13 @@ mod adapter_tests {
             parse_confidence("llm_classifier selected nano (confidence 0.91)"),
             Some(0.91)
         );
+        let (reason, confidence) = routing_receipt(
+            RoutingMode::Auto,
+            "gpt-5-mini",
+            Some("fall-through selected gpt-5-mini (confidence 0.000)".into()),
+        );
+        assert_eq!(confidence, None);
+        assert!(reason.unwrap().contains("safety fallback"));
     }
 
     #[tokio::test]

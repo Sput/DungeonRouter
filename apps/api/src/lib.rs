@@ -364,6 +364,11 @@ async fn chat(
                     }
                 }
             }
+            if answer.trim().is_empty() {
+                let _ = usage::record(&usage_db, &cost_config, usage::RunRecord { routing_mode, selected_model: &selected_model, selection_reason: routing_reason.as_deref(), classifier_confidence, usage: token_usage.as_ref(), latency_ms: started_at.elapsed().as_millis() as u64, status: "failed" }).await;
+                yield Ok(sse_json("error", &ApiErrorBody { error: "the selected model completed without producing answer text".into() }));
+                return;
+            }
             let validation = crate::chat::validate_citations(&answer, source_count);
             yield Ok(sse_json("citation_validation", &validation));
             let _ = usage::record(&usage_db, &cost_config, usage::RunRecord { routing_mode, selected_model: &selected_model, selection_reason: routing_reason.as_deref(), classifier_confidence, usage: token_usage.as_ref(), latency_ms: started_at.elapsed().as_millis() as u64, status: "completed" }).await;
@@ -417,7 +422,7 @@ fn validate_request(request: ManualCompletionRequest) -> Result<CompletionReques
             "prompt must not exceed 12,000 characters".into(),
         ));
     }
-    let max_output_tokens = request.max_output_tokens.unwrap_or(800);
+    let max_output_tokens = request.max_output_tokens.unwrap_or(4_000);
     if !(1..=4_000).contains(&max_output_tokens) {
         return Err(RouterApiError::InvalidPrompt(
             "max_output_tokens must be between 1 and 4,000".into(),
@@ -567,6 +572,18 @@ mod tests {
                 output_tokens: 100,
                 total_tokens: 1_100,
             }),
+        }))
+    }
+
+    fn empty_mock_router() -> Arc<MockRouter> {
+        Arc::new(MockRouter::new(CompletionResponse {
+            content: String::new(),
+            requested_model: ModelTier::Nano,
+            selected_model: "gpt-5-nano".into(),
+            routing_mode: RoutingMode::Manual,
+            routing_reason: Some("Manual route".into()),
+            classifier_confidence: None,
+            usage: None,
         }))
     }
 
@@ -768,6 +785,37 @@ mod tests {
         assert_eq!(summary.automatic_requests, 1);
         assert_eq!(summary.requests_by_model[0].model, "gpt-5-nano");
         assert!(summary.actual_cost_usd > 0.0);
+    }
+
+    #[tokio::test]
+    async fn grounded_chat_reports_an_empty_model_stream_as_an_error() {
+        let state = searchable_test_state(empty_mock_router()).await;
+        let response = app(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/chat")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"prompt":"What does prone do?","model":"nano"}"#,
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let text = String::from_utf8(
+            response
+                .into_body()
+                .collect()
+                .await
+                .unwrap()
+                .to_bytes()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("event: error"));
+        assert!(text.contains("completed without producing answer text"));
+        assert!(!text.contains("event: done"));
     }
 
     #[tokio::test]

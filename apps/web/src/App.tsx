@@ -92,7 +92,7 @@ export function App() {
       const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ prompt: question.trim(), model: model === "auto" ? "mini" : model, routing_mode: model === "auto" ? "auto" : "manual", max_output_tokens: 800 }),
+        body: JSON.stringify({ prompt: question.trim(), model: model === "auto" ? "mini" : model, routing_mode: model === "auto" ? "auto" : "manual", max_output_tokens: 4000 }),
         signal: abortController.signal,
       });
       if (!response.ok) {

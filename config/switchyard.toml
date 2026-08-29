@@ -40,7 +40,7 @@ mode = "custom"
 classifier_target = "nano"
 targets = ["nano", "mini", "gpt5"]
 default_target = "mini"
-max_output_tokens = 300
+max_output_tokens = 2000
 prompt = """
 Route a grounded D&D 5e SRD question to the cheapest model likely to answer it correctly.
 
