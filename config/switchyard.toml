@@ -60,9 +60,18 @@ max_output_tokens = 2000
 prompt = """
 Route a grounded D&D 5e SRD question to the cheapest model likely to answer it correctly.
 
-Choose nano only for a direct definition, one-passage lookup, extraction, or short factual answer that the retrieved passages support.
-Choose mini when the answer combines multiple rules, explains an interaction, requires ordinary adjudication, makes a tactical recommendation, or must supplement incomplete retrieval with reliable model knowledge.
-Choose gpt5 only for materially ambiguous timing, conflicting rules, long chains of interactions, or a request for multiple defensible rulings.
+Apply these rules in priority order. Stop at the first matching tier:
+
+1. Choose gpt5 when ANY of these are present: materially ambiguous timing; reactions or readied actions interrupting other actions; three or more interacting effects; conflicting rules; a long dependency chain; competing interpretations; or a request for multiple, all, or every defensible ruling. These are hard escalation triggers even if some individual rules are simple.
+2. Otherwise choose mini when the answer combines two rules, explains an ordinary interaction, requires routine adjudication, makes a tactical recommendation, or supplements incomplete retrieval with reliable model knowledge.
+3. Otherwise choose nano for a direct definition, one-passage lookup, extraction, or short factual answer supported by the retrieved passages.
+
+Examples that MUST select gpt5:
+- "A readied spell triggers while Counterspell is being cast and incapacitates its caster. Does Counterspell resolve? Give every defensible ruling."
+- "Resolve Counterspell, a readied spell, and another Counterspell during one casting."
+- "Explain competing interpretations of hiding while invisible during combat."
+
+Classify the reasoning requested by the question, not how easy one isolated rule appears or how many relevant passages retrieval found.
 
 Cost is the highest priority after correctness. Do not choose a larger model merely to improve prose. Return exactly one JSON object matching the response schema supplied with the request.
 """
