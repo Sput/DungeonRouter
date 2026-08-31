@@ -10,18 +10,7 @@ The goal was not simply to put a chat interface in front of an LLM. The interest
 
 DungeonRouter runs as three local processes:
 
-```text
-React/TypeScript browser (:5173)
-          │ HTTP + Server-Sent Events
-          ▼
-Rust/Axum API (:4000) ─────► SQLite + FTS5
-          │ OpenAI-compatible request
-          ▼
-NVIDIA NeMo Switchyard (:4100)
-          │
-          ▼
-OpenAI API
-```
+![DungeonRouter architecture showing the browser, Rust API, local search, Switchyard, and OpenAI flow](assets/dungeonrouter-architecture.svg)
 
 The browser never receives the OpenAI API key. It sends a question and routing preference to the Rust service, then renders sources, answer fragments, model metadata, token usage, and validation results as Server-Sent Events.
 

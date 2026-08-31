@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="650" viewBox="0 0 1000 650" role="img" aria-labelledby="title description">
+  <title id="title">DungeonRouter architecture</title>
+  <desc id="description">The React and TypeScript browser communicates with the Rust and Axum API using HTTP and Server-Sent Events. The API searches SQLite and FTS5 and sends OpenAI-compatible requests through NVIDIA NeMo Switchyard to the OpenAI API.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="primary" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="secondary" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020617" flood-opacity="0.32"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#93c5fd"/>
+    </marker>
+    <style>
+      .box { stroke: rgba(255,255,255,0.18); stroke-width: 1.5; filter: url(#shadow); }
+      .eyebrow { fill: #bfdbfe; font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.8px; }
+      .heading { fill: #ffffff; font: 700 25px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .detail { fill: #dbeafe; font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .flow { fill: #bfdbfe; font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .line { fill: none; stroke: #93c5fd; stroke-width: 3; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1000" height="650" rx="28" fill="url(#background)"/>
+  <circle cx="70" cy="70" r="130" fill="#7c3aed" opacity="0.10"/>
+  <circle cx="930" cy="590" r="170" fill="#06b6d4" opacity="0.08"/>
+
+  <g transform="translate(155 45)">
+    <rect class="box" width="510" height="112" rx="18" fill="url(#primary)"/>
+    <text class="eyebrow" x="28" y="35">CLIENT</text>
+    <text class="heading" x="28" y="68">React + TypeScript browser</text>
+    <text class="detail" x="28" y="94">Questions, sources, streaming answers, and routing receipts</text>
+  </g>
+
+  <path class="line" d="M 410 157 L 410 217"/>
+  <text class="flow" x="430" y="194">HTTP + Server-Sent Events</text>
+
+  <g transform="translate(155 225)">
+    <rect class="box" width="510" height="128" rx="18" fill="#1e40af"/>
+    <text class="eyebrow" x="28" y="35">APPLICATION</text>
+    <text class="heading" x="28" y="70">Rust + Axum API</text>
+    <text class="detail" x="28" y="98">Retrieval, grounding, budgets, validation, and streaming</text>
+  </g>
+
+  <path class="line" d="M 665 289 C 705 289, 718 289, 755 289"/>
+  <text class="flow" x="718" y="262" text-anchor="middle">Search + usage</text>
+
+  <g transform="translate(765 225)">
+    <rect class="box" width="185" height="128" rx="18" fill="url(#secondary)"/>
+    <text class="eyebrow" x="24" y="35">LOCAL DATA</text>
+    <text class="heading" x="24" y="70">SQLite</text>
+    <text class="detail" x="24" y="97">FTS5 indexes</text>
+  </g>
+
+  <path class="line" d="M 410 353 L 410 413"/>
+  <text class="flow" x="430" y="390">OpenAI-compatible request</text>
+
+  <g transform="translate(155 421)">
+    <rect class="box" width="510" height="104" rx="18" fill="#334155"/>
+    <text class="eyebrow" x="28" y="34">MODEL ROUTER</text>
+    <text class="heading" x="28" y="68">NVIDIA NeMo Switchyard</text>
+    <text class="detail" x="28" y="91">Classifies complexity and selects Nano, Mini, or GPT-5</text>
+  </g>
+
+  <path class="line" d="M 410 525 L 410 577"/>
+  <text class="flow" x="430" y="559">Selected model request</text>
+
+  <g transform="translate(155 585)">
+    <rect class="box" width="510" height="52" rx="16" fill="#0f766e"/>
+    <text class="heading" x="255" y="34" text-anchor="middle">OpenAI API</text>
+  </g>
+</svg>
