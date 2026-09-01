@@ -47,18 +47,36 @@ pub async fn search(
     limit: u32,
 ) -> Result<Vec<SearchResult>, SearchError> {
     let expression = fts_expression(query).ok_or(SearchError::EmptyQuery)?;
-    let mut results = Vec::new();
-    for kind in ["srd", "campaign_note"] {
-        results.extend(search_kind(pool, &expression, kind, limit).await?);
+    let mut srd = search_kind(pool, &expression, "srd", limit).await?;
+    let mut campaign = search_kind(pool, &expression, "campaign_note", limit).await?;
+    let mut results = Vec::with_capacity(limit as usize);
+
+    // Preserve at least one result from each corpus when both match. Without
+    // this, several strong campaign-name matches can consume the entire context
+    // window even when the question also asks for an official rule.
+    if limit >= 2 && !srd.is_empty() && !campaign.is_empty() {
+        results.push(srd.remove(0));
+        results.push(campaign.remove(0));
+        let mut remaining = srd;
+        remaining.extend(campaign);
+        remaining.sort_by(score_order);
+        remaining.truncate(limit.saturating_sub(2) as usize);
+        results.extend(remaining);
+    } else {
+        results.extend(srd);
+        results.extend(campaign);
+        results.sort_by(score_order);
+        results.truncate(limit as usize);
     }
-    results.sort_by(|left, right| {
-        right
-            .score
-            .partial_cmp(&left.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    results.truncate(limit as usize);
+    results.sort_by(score_order);
     Ok(results)
+}
+
+fn score_order(left: &SearchResult, right: &SearchResult) -> std::cmp::Ordering {
+    right
+        .score
+        .partial_cmp(&left.score)
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
 
 async fn search_kind(
@@ -123,7 +141,7 @@ fn fts_expression(query: &str) -> Option<String> {
         .split(|character: char| !character.is_alphanumeric())
         .map(str::to_lowercase)
         .filter(|term| term.len() > 1 && !STOP_WORDS.contains(&term.as_str()))
-        .take(8)
+        .take(16)
         .collect::<Vec<_>>();
     terms.sort();
     terms.dedup();
@@ -139,6 +157,7 @@ fn fts_expression(query: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::notes::{self, CreateNote};
     use crate::srd::{SrdChunk, SrdDocument, SrdSnapshot, ingest_snapshot};
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -192,9 +211,40 @@ mod tests {
         assert!(passage.content.contains("only movement option"));
     }
 
+    #[tokio::test]
+    async fn mixed_matches_preserve_srd_and_campaign_sources() {
+        let pool = fixture_pool().await;
+        notes::create(
+            &pool,
+            CreateNote {
+                title: "Table Conditions".into(),
+                filename: "conditions.md".into(),
+                content: "# Prone at this table\n\nA silver token marks a prone hero.".into(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let results = search(&pool, "What does prone mean at this table?", 4)
+            .await
+            .unwrap();
+        assert!(results.iter().any(|result| result.kind == "srd"));
+        assert!(results.iter().any(|result| result.kind == "campaign_note"));
+    }
+
     #[test]
     fn query_syntax_is_sanitized() {
         assert_eq!(fts_expression("what is prone?"), Some("\"prone\"*".into()));
         assert_eq!(fts_expression("the and what"), None);
+    }
+
+    #[test]
+    fn query_keeps_later_rules_terms() {
+        let expression = fts_expression(
+            "Mara Venn star iron Moon Gate activation procedure level seven wizard spell concentration",
+        )
+        .unwrap();
+        assert!(expression.contains("\"wizard\"*"));
+        assert!(expression.contains("\"concentration\"*"));
     }
 }

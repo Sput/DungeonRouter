@@ -5,7 +5,7 @@ The user-facing question flow uses `POST /api/chat`. It retrieves SRD and locall
 ## Request flow
 
 1. Validate the question, selected manual model, and output limit.
-2. Search SRD and campaign-note passages separately with SQLite FTS5, then merge by relevance.
+2. Search SRD and campaign-note passages separately with SQLite FTS5, preserve at least one result from each matching corpus, then fill the remaining slots by relevance.
 3. Retrieve at most four complete passages.
 4. Assign request-local citation IDs (`S1`, `S2`, and so on).
 5. Send a developer message that prioritizes supplied evidence and requires explicit labeling for model knowledge.
