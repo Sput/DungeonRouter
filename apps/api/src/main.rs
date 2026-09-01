@@ -25,9 +25,9 @@ async fn main() -> Result<()> {
     let switchyard_base_url =
         env::var("SWITCHYARD_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:4100".into());
     let supabase_url = env::var("SUPABASE_URL").context("SUPABASE_URL is required")?;
-    let supabase_publishable_key =
-        env::var("SUPABASE_PUBLISHABLE_KEY").context("SUPABASE_PUBLISHABLE_KEY is required")?;
-    let auth = SupabaseAuth::new(&supabase_url, supabase_publishable_key)
+    let supabase_anon_key =
+        env::var("SUPABASE_ANON_KEY").context("SUPABASE_ANON_KEY is required")?;
+    let auth = SupabaseAuth::new(&supabase_url, supabase_anon_key)
         .context("failed to configure Supabase authentication")?;
 
     if let Some(path) = sqlite_parent_path(&database_url) {

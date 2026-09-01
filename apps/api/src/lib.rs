@@ -613,9 +613,8 @@ mod tests {
     #[tokio::test]
     async fn protected_routes_require_a_bearer_token_when_auth_is_enabled() {
         let mut state = test_state(mock_router()).await;
-        state.auth = Some(
-            auth::SupabaseAuth::new("https://example.supabase.co", "publishable-key").unwrap(),
-        );
+        state.auth =
+            Some(auth::SupabaseAuth::new("https://example.supabase.co", "anon-key").unwrap());
         let service = app(state);
 
         let protected = service

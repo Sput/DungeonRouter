@@ -6,16 +6,16 @@ The Rust API does not trust the presence of a browser session. Its authenticatio
 
 ## Required configuration
 
-Provide the same project URL and publishable key to the browser and API:
+Provide the same project URL and anon key to the browser and API:
 
 ```dotenv
 SUPABASE_URL=https://your-project.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_ANON_KEY=your-anon-key
 VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+VITE_SUPABASE_ANON_KEY=your-anon-key
 ```
 
-Projects that still use legacy keys may use the `anon` key in place of the publishable key. These values identify the project but do not grant administrative access, so they are appropriate for a browser bundle.
+The anon key identifies the project but does not grant administrative access, so it is appropriate for a browser bundle.
 
 Never put the Supabase `service_role`, secret key, database password, or JWT signing secret in a `VITE_` variable. DungeonRouter does not require any of them.
 
@@ -44,4 +44,3 @@ The Rust API reads the non-Vite values from the repository-root `.env` when it s
 - Provider response bodies and access tokens are not returned in application errors.
 - Signing out removes the browser session and returns to the login page.
 - A valid Supabase user currently has access to the entire local DungeonRouter dataset; per-user campaign isolation has not been implemented.
-

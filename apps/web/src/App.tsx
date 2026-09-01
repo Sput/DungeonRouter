@@ -57,7 +57,7 @@ export function App() {
     setSigningIn(false);
   }
 
-  if (!supabase) return <AuthShell><p className="auth-error">Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.</p></AuthShell>;
+  if (!supabase) return <AuthShell><p className="auth-error">Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.</p></AuthShell>;
   if (authLoading) return <AuthShell><p className="auth-status">Checking your session…</p></AuthShell>;
   if (!session) return <AuthShell><form className="login-form" onSubmit={(event) => void signIn(event)}>
     <label htmlFor="email">Email</label><input id="email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)}/>

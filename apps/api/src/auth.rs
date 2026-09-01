@@ -15,24 +15,24 @@ use crate::AppState;
 pub struct SupabaseAuth {
     client: Client,
     user_endpoint: Url,
-    publishable_key: String,
+    anon_key: String,
 }
 
 impl SupabaseAuth {
     pub fn new(
         supabase_url: &str,
-        publishable_key: impl Into<String>,
+        anon_key: impl Into<String>,
     ) -> Result<Self, AuthConfigurationError> {
         let base_url = Url::parse(supabase_url.trim())?;
         let user_endpoint = base_url.join("auth/v1/user")?;
-        let publishable_key = publishable_key.into();
-        if publishable_key.trim().is_empty() {
-            return Err(AuthConfigurationError::MissingPublishableKey);
+        let anon_key = anon_key.into();
+        if anon_key.trim().is_empty() {
+            return Err(AuthConfigurationError::MissingAnonKey);
         }
         Ok(Self {
             client: Client::new(),
             user_endpoint,
-            publishable_key,
+            anon_key,
         })
     }
 
@@ -40,7 +40,7 @@ impl SupabaseAuth {
         let response = self
             .client
             .get(self.user_endpoint.clone())
-            .header("apikey", &self.publishable_key)
+            .header("apikey", &self.anon_key)
             .bearer_auth(token)
             .send()
             .await
@@ -97,8 +97,8 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
 pub enum AuthConfigurationError {
     #[error("SUPABASE_URL must be a valid URL")]
     InvalidUrl(#[from] url::ParseError),
-    #[error("SUPABASE_PUBLISHABLE_KEY must not be empty")]
-    MissingPublishableKey,
+    #[error("SUPABASE_ANON_KEY must not be empty")]
+    MissingAnonKey,
 }
 
 #[derive(Debug, Error)]

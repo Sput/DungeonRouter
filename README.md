@@ -32,7 +32,7 @@ docs/        Architecture and project planning
 - Node.js 20 or newer
 - pnpm 9 or newer
 - an OpenAI API key for live answers
-- a Supabase project and publishable key for authentication
+- a Supabase project and anon key for authentication
 - `switchyard-server` for live routing
 
 An OpenAI API key is not required for unit tests or frontend development. It is required only when exercising live model calls through Switchyard.
@@ -45,7 +45,7 @@ Copy the environment template:
 cp .env.example .env
 ```
 
-Add the Supabase project URL and publishable key to `.env`, and add the corresponding `VITE_` values to `apps/web/.env.local`. See [Authentication](docs/authentication.md). Do not use a Supabase service-role or secret key.
+Add the Supabase project URL and anon key to `.env`, and add the corresponding `VITE_` values to `apps/web/.env.local`. See [Authentication](docs/authentication.md). Do not use a Supabase service-role or secret key.
 
 Install frontend dependencies:
 
