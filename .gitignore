@@ -2,6 +2,7 @@
 .env.local
 target/
 node_modules/
+.pnpm-store/
 dist/
 data/
 tmp/

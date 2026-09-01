@@ -2,7 +2,8 @@ use std::{env, net::SocketAddr, path::Path, sync::Arc};
 
 use anyhow::{Context, Result};
 use dungeon_router_api::{
-    AppState, app, routing::SwitchyardRouter, srd::ensure_bundled_srd, usage::CostConfig,
+    AppState, app, auth::SupabaseAuth, routing::SwitchyardRouter, srd::ensure_bundled_srd,
+    usage::CostConfig,
 };
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::net::TcpListener;
@@ -23,6 +24,11 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "sqlite://data/dungeon-router.db?mode=rwc".into());
     let switchyard_base_url =
         env::var("SWITCHYARD_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:4100".into());
+    let supabase_url = env::var("SUPABASE_URL").context("SUPABASE_URL is required")?;
+    let supabase_publishable_key =
+        env::var("SUPABASE_PUBLISHABLE_KEY").context("SUPABASE_PUBLISHABLE_KEY is required")?;
+    let auth = SupabaseAuth::new(&supabase_url, supabase_publishable_key)
+        .context("failed to configure Supabase authentication")?;
 
     if let Some(path) = sqlite_parent_path(&database_url) {
         tokio::fs::create_dir_all(path)
@@ -64,10 +70,18 @@ async fn main() -> Result<()> {
 
     info!(%address, "DungeonRouter API listening");
     let costs = CostConfig::from_env().context("failed to load cost controls")?;
-    axum::serve(listener, app(AppState { db, router, costs }))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("API server exited unexpectedly")?;
+    axum::serve(
+        listener,
+        app(AppState {
+            db,
+            router,
+            costs,
+            auth: Some(auth),
+        }),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("API server exited unexpectedly")?;
 
     Ok(())
 }

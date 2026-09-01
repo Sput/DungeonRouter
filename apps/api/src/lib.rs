@@ -2,6 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderValue, Method, StatusCode},
+    middleware,
     response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
 };
@@ -20,6 +21,7 @@ use tower_http::{
 };
 use tracing::Level;
 
+pub mod auth;
 pub mod chat;
 pub mod notes;
 pub mod routing;
@@ -32,6 +34,7 @@ pub struct AppState {
     pub db: SqlitePool,
     pub router: SharedModelRouter,
     pub costs: usage::CostConfig,
+    pub auth: Option<auth::SupabaseAuth>,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,8 +45,7 @@ pub struct HealthResponse {
 }
 
 pub fn app(state: AppState) -> Router {
-    Router::new()
-        .route("/api/health", get(health))
+    let protected = Router::new()
         .route("/api/config/public", get(public_config))
         .route("/api/models", get(models))
         .route("/api/activity", get(activity))
@@ -56,6 +58,14 @@ pub fn app(state: AppState) -> Router {
         .route("/api/router/complete", post(complete))
         .route("/api/router/stream", post(stream))
         .route("/api/chat", post(chat))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
+    Router::new()
+        .route("/api/health", get(health))
+        .merge(protected)
         .with_state(state)
         .layer(
             CorsLayer::new()
@@ -505,6 +515,7 @@ mod tests {
             db,
             router,
             costs: usage::CostConfig::default(),
+            auth: None,
         }
     }
 
@@ -597,6 +608,38 @@ mod tests {
             .to_bytes();
         let text = String::from_utf8(body.to_vec()).expect("body should be UTF-8");
         assert!(text.contains("\"database\":\"connected\""));
+    }
+
+    #[tokio::test]
+    async fn protected_routes_require_a_bearer_token_when_auth_is_enabled() {
+        let mut state = test_state(mock_router()).await;
+        state.auth = Some(
+            auth::SupabaseAuth::new("https://example.supabase.co", "publishable-key").unwrap(),
+        );
+        let service = app(state);
+
+        let protected = service
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/models")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(protected.status(), StatusCode::UNAUTHORIZED);
+
+        let health = service
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
     }
 
     #[tokio::test]

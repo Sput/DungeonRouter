@@ -1,4 +1,6 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "./supabase";
 
 type Health = { service: string; status: "ok" | "degraded"; database: "connected" | "unavailable" };
 type ModelTier = "nano" | "mini" | "gpt-5";
@@ -26,6 +28,57 @@ const FALLBACK_MODELS: ModelDescriptor[] = [
 ];
 
 export function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
+
+  useEffect(() => {
+    if (!supabase) { setAuthLoading(false); return; }
+    void supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+    return () => data.subscription.unsubscribe();
+  }, []);
+
+  async function signIn(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || !email.trim() || !password) return;
+    setSigningIn(true); setAuthError(null);
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    if (error) setAuthError("The email or password was not accepted.");
+    setSigningIn(false);
+  }
+
+  if (!supabase) return <AuthShell><p className="auth-error">Supabase is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY.</p></AuthShell>;
+  if (authLoading) return <AuthShell><p className="auth-status">Checking your session…</p></AuthShell>;
+  if (!session) return <AuthShell><form className="login-form" onSubmit={(event) => void signIn(event)}>
+    <label htmlFor="email">Email</label><input id="email" type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)}/>
+    <label htmlFor="password">Password</label><input id="password" type="password" autoComplete="current-password" required value={password} onChange={(event) => setPassword(event.target.value)}/>
+    {authError && <p className="auth-error" role="alert">{authError}</p>}
+    <button type="submit" disabled={signingIn}>{signingIn ? "Signing in…" : "Sign in"}</button>
+  </form></AuthShell>;
+
+  return <DungeonRouterApp accessToken={session.access_token} email={session.user.email ?? "Signed-in user"}/>;
+}
+
+function AuthShell({ children }: { children: React.ReactNode }) {
+  return <main className="auth-page"><section className="auth-card" aria-labelledby="login-title">
+    <div className="eyebrow">SRD 5.1 · 2014 rules</div>
+    <h1 id="login-title">DungeonRouter</h1>
+    <p className="lede">Sign in to query the archive and manage campaign notes.</p>
+    {children}
+  </section></main>;
+}
+
+function DungeonRouterApp({ accessToken, email }: { accessToken: string; email: string }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState(false);
   const [models, setModels] = useState(FALLBACK_MODELS);
@@ -51,30 +104,30 @@ export function App() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/health").then((response) => {
+      apiFetch(accessToken, "/api/health").then((response) => {
         if (!response.ok) throw new Error("Health check failed");
         return response.json() as Promise<Health>;
       }),
-      fetch("/api/models").then((response) => {
+      apiFetch(accessToken, "/api/models").then((response) => {
         if (!response.ok) throw new Error("Model catalog failed");
         return response.json() as Promise<ModelDescriptor[]>;
       }),
-      fetch("/api/notes").then((response) => response.ok ? response.json() as Promise<CampaignNote[]> : []),
+      apiFetch(accessToken, "/api/notes").then((response) => response.ok ? response.json() as Promise<CampaignNote[]> : []),
     ]).then(([nextHealth, nextModels, nextNotes]) => {
       setHealth(nextHealth);
       setModels(nextModels);
       setNotes(nextNotes);
     }).catch(() => setHealthError(true));
-  }, []);
+  }, [accessToken]);
 
   useEffect(() => () => controller.current?.abort(), []);
-  useEffect(() => { void refreshUsage(); }, []);
+  useEffect(() => { void refreshUsage(); }, [accessToken]);
   const isRunning = runState === "connecting" || runState === "streaming";
   const status = health?.status === "ok" ? "API connected" : healthError ? "API unavailable" : "Checking API";
   const chosenModel = model === "auto" ? null : models.find((item) => item.tier === model);
 
   async function refreshUsage() {
-    const response = await fetch("/api/usage/summary").catch(() => null);
+    const response = await apiFetch(accessToken, "/api/usage/summary").catch(() => null);
     if (response?.ok) setUsageSummary(await response.json() as UsageSummary);
   }
 
@@ -89,7 +142,7 @@ export function App() {
     setSources([]); setCitationValidation(null); setActiveSource(null);
     setRunState("connecting");
     try {
-      const response = await fetch("/api/chat", {
+      const response = await apiFetch(accessToken, "/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ prompt: question.trim(), model: model === "auto" ? "mini" : model, routing_mode: model === "auto" ? "auto" : "manual", max_output_tokens: 8000 }),
@@ -140,7 +193,7 @@ export function App() {
 
   async function openSource(source: GroundedSource) {
     try {
-      const response = await fetch(`/api/sources/${source.chunk_id}`);
+      const response = await apiFetch(accessToken, `/api/sources/${source.chunk_id}`);
       if (!response.ok) throw new Error("Source unavailable");
       setActiveSource({ ...(await response.json()), citation_id: source.citation_id, excerpt: source.excerpt } as SourceChunk);
     } catch {
@@ -154,7 +207,7 @@ export function App() {
     try {
       if (!/\.(md|markdown|txt)$/i.test(file.name)) throw new Error("Choose a Markdown or plain-text file.");
       if (file.size > 256 * 1024) throw new Error("Campaign notes must be no larger than 256 KiB.");
-      const response = await fetch("/api/notes", {
+      const response = await apiFetch(accessToken, "/api/notes", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: file.name.replace(/\.(md|markdown|txt)$/i, ""), filename: file.name, content: await file.text() }),
       });
@@ -171,7 +224,7 @@ export function App() {
     if (!window.confirm(`Delete “${note.title}” and all of its indexed passages?`)) return;
     setNotesBusy(true); setNoteMessage(null);
     try {
-      const response = await fetch(`/api/notes/${note.id}`, { method: "DELETE" });
+      const response = await apiFetch(accessToken, `/api/notes/${note.id}`, { method: "DELETE" });
       if (!response.ok) throw new Error("The note could not be deleted.");
       setNotes((current) => current.filter((item) => item.id !== note.id));
       setNoteMessage(`${note.title} was deleted.`);
@@ -182,7 +235,7 @@ export function App() {
 
   return <main><section className="shell" aria-labelledby="page-title">
     <header className="hero"><div><div className="eyebrow">SRD 5.1 · 2014 rules</div><h1 id="page-title">DungeonRouter</h1><p className="lede">Fast rules answers with cost-aware model routing.</p></div>
-      <div className="status" role="status" aria-live="polite"><span className={health?.status === "ok" ? "dot dot--ok" : "dot"}/><span>{status}</span>{health?.database === "connected" && <span className="muted">SQLite ready</span>}</div></header>
+      <div className="account"><div className="status" role="status" aria-live="polite"><span className={health?.status === "ok" ? "dot dot--ok" : "dot"}/><span>{status}</span>{health?.database === "connected" && <span className="muted">SQLite ready</span>}</div><span className="account-email">{email}</span><button className="sign-out" type="button" onClick={() => void supabase?.auth.signOut()}>Sign out</button></div></header>
     <form className="ask" onSubmit={(event) => void ask(event)}><label htmlFor="question">Query the archive</label>
       <textarea id="question" name="question" placeholder="What does the prone condition do?" rows={5} value={question} onChange={(event) => setQuestion(event.target.value)} onKeyDown={handleQuestionKeyDown} disabled={isRunning}/>
       <div className="route-picker"><div><span className="field-label">Attunement</span><p>{model === "auto" ? "Switchyard selects the cheapest capable model" : chosenModel?.purpose}</p></div>
@@ -212,6 +265,12 @@ export function App() {
       {usageSummary && <><div className="budget-track"><span style={{ width: `${Math.min(100, usageSummary.actual_cost_usd / usageSummary.hard_limit_usd * 100)}%` }}/></div><p className="budget-copy">${usageSummary.actual_cost_usd.toFixed(4)} of ${usageSummary.hard_limit_usd.toFixed(2)} hard limit · warning at ${usageSummary.warning_threshold_usd.toFixed(2)} · {usageSummary.automatic_requests} auto / {usageSummary.manual_requests} manual</p><div className="model-counts">{usageSummary.requests_by_model.map((item) => <span key={item.model}>{item.model}: {item.requests} · {(item.average_latency_ms / 1000).toFixed(1)}s avg</span>)}</div></>}
     </section>
   </section></main>;
+}
+
+function apiFetch(accessToken: string, input: RequestInfo | URL, init: RequestInit = {}) {
+  const headers = new Headers(init.headers);
+  headers.set("Authorization", `Bearer ${accessToken}`);
+  return fetch(input, { ...init, headers });
 }
 
 function renderAnswer(answer: string, sources: GroundedSource[], validation: CitationValidation | null, openSource: (source: GroundedSource) => Promise<void>) {
