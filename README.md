@@ -113,6 +113,7 @@ pnpm build:web
 - [Grounded chat](docs/grounded-chat.md)
 - [Campaign notes](docs/campaign-notes.md)
 - [Authentication](docs/authentication.md)
+- [Single-container deployment](docs/deployment.md)
 - [Cost controls](docs/cost-controls.md)
 - [Evaluation set](evals/README.md)
 - [Known limitations](docs/limitations.md)

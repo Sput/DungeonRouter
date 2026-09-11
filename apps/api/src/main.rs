@@ -24,6 +24,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|_| "sqlite://data/dungeon-router.db?mode=rwc".into());
     let switchyard_base_url =
         env::var("SWITCHYARD_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:4100".into());
+    let web_dist_dir = env::var("WEB_DIST_DIR").unwrap_or_else(|_| "web".into());
     let supabase_url = env::var("SUPABASE_URL").context("SUPABASE_URL is required")?;
     let supabase_anon_key =
         env::var("SUPABASE_ANON_KEY").context("SUPABASE_ANON_KEY is required")?;
@@ -77,7 +78,11 @@ async fn main() -> Result<()> {
             router,
             costs,
             auth: Some(auth),
-        }),
+        })
+        .fallback_service(
+            tower_http::services::ServeDir::new(web_dist_dir)
+                .not_found_service(tower_http::services::ServeFile::new("web/index.html")),
+        ),
     )
     .with_graceful_shutdown(shutdown_signal())
     .await
