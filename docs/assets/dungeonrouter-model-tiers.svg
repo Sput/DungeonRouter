@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560" role="img" aria-labelledby="title description">
+  <title id="title">Model tiers and intended workload</title>
+  <desc id="description">GPT-5 Nano handles definitions, extraction, and direct one-passage lookups. GPT-5 Mini handles multi-rule explanations, routine adjudication, and tactical recommendations. GPT-5 handles ambiguous timing, competing interpretations, and long chains of interacting effects.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="primary" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c3aed"/>
+      <stop offset="1" stop-color="#4f46e5"/>
+    </linearGradient>
+    <linearGradient id="secondary" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f766e"/>
+      <stop offset="1" stop-color="#0e7490"/>
+    </linearGradient>
+    <linearGradient id="tertiary" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#b91c1c"/>
+      <stop offset="1" stop-color="#ea580c"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020617" flood-opacity="0.32"/>
+    </filter>
+    <style>
+      .box { stroke: rgba(255,255,255,0.18); stroke-width: 1.5; filter: url(#shadow); }
+      .eyebrow { fill: #bfdbfe; font: 600 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; letter-spacing: 1.8px; }
+      .heading { fill: #ffffff; font: 700 22px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .detail { fill: #dbeafe; font: 400 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .divider { stroke: rgba(255,255,255,0.15); stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect width="1000" height="560" rx="28" fill="url(#background)"/>
+  <circle cx="70" cy="60" r="130" fill="#7c3aed" opacity="0.10"/>
+  <circle cx="930" cy="500" r="170" fill="#06b6d4" opacity="0.08"/>
+
+  <text class="eyebrow" x="165" y="50" text-anchor="middle">TIER</text>
+  <text class="eyebrow" x="330" y="50">INTENDED WORKLOAD</text>
+  <line class="divider" x1="40" y1="68" x2="960" y2="68"/>
+
+  <g transform="translate(40 105)">
+    <rect class="box" width="250" height="100" rx="18" fill="url(#secondary)"/>
+    <text class="heading" x="125" y="58" text-anchor="middle">GPT-5 Nano</text>
+  </g>
+  <text class="detail" x="330" y="161">Definitions, extraction, and direct one-passage lookups</text>
+
+  <g transform="translate(40 255)">
+    <rect class="box" width="250" height="100" rx="18" fill="url(#primary)"/>
+    <text class="heading" x="125" y="58" text-anchor="middle">GPT-5 Mini</text>
+  </g>
+  <text class="detail" x="330" y="295">Multi-rule explanations, routine adjudication,</text>
+  <text class="detail" x="330" y="319">and tactical recommendations</text>
+
+  <g transform="translate(40 405)">
+    <rect class="box" width="250" height="100" rx="18" fill="url(#tertiary)"/>
+    <text class="heading" x="125" y="58" text-anchor="middle">GPT-5</text>
+  </g>
+  <text class="detail" x="330" y="445">Ambiguous timing, competing interpretations,</text>
+  <text class="detail" x="330" y="469">and long chains of interacting effects</text>
+</svg>
